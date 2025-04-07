@@ -50,10 +50,10 @@ These instructions will guide you through setting up the project on Windows or L
     ```bash
     pip install -r requirements.txt
     ```
-    This will install PySide6, paho-mqtt, meshtastic, pyserial, pygame, and pypubsub.
-
+    This will install [PySide6](https://pypi.org/project/PySide6/), [paho-mqtt](https://pypi.org/project/paho-mqtt/), [meshtastic](https://github.com/meshtastic/python), [pyserial](https://github.com/pyserial/pyserial), [pygame](https://github.com/pygame/pygame), and [pypubsub](https://github.com/Humbedooh/pypubsub).
+    
 ## Usage
-
+ 
 1.  Make sure your dependencies are installed and settings are configured.
 2.  Run the main script:
     ```bash
