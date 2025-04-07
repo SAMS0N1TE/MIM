@@ -1,0 +1,6 @@
+PySide6
+paho-mqtt
+meshtastic
+pyserial
+pygame
+pypubsub
