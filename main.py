@@ -16,6 +16,8 @@ from buddy_list_window import BuddyListWindow
 from meshtastic_handler import MeshtasticHandler
 from settings_window import SettingsWindow
 
+# Define update interval (e.g., 5 minutes = 5 * 60 * 1000 ms)
+NODE_UPDATE_INTERVAL_MS = 5 * 60 * 1000
 CONFIG_FILE_NAME = "mim_meshtastic_config.json"
 
 def get_resource_path(relative_path):
@@ -87,36 +89,44 @@ def load_config():
 
 # --- Application Controller ---
 class ApplicationController(QObject):
+    # Define signals here if not already defined
     mqtt_connection_updated = Signal(bool, str)
     mqtt_message_received_signal = Signal(str, str, str)
 
-    _connection_error_shown = False
-
-    def __init__(self, app):
+    def __init__(self, app: QApplication): # Added type hint for clarity
         super().__init__()
         self.app = app
         self.login_window = None
         self.buddy_list_window = None
         self.settings_window = None
-        self.current_config = load_config()
-        initial_sound_state = self.current_config.get("sounds_enabled", True)
-        set_sounds_enabled(initial_sound_state)
+        self.current_config = load_config() # Load config on startup
         self.connection_settings = {}
         self.mqtt_client = None
         self.meshtastic_handler = None
         self._signing_off = False
-        self._node_list_timer_active = False
+        self._connection_error_shown = False
+        self._node_list_timer_active = False # Flag for initial delay timer
 
-        # --- Connect MQTT Signals ---
-        # Connect signals for thread-safe UI updates from MQTT callbacks
+        # Set initial sound state from config
+        initial_sound_state = self.current_config.get("sounds_enabled", True) # Default true
+        set_sounds_enabled(initial_sound_state)
+
+        # Initialize the periodic node update timer
+        self.node_update_timer = QTimer(self)
+        self.node_update_timer.timeout.connect(self._request_periodic_node_update)
+
+        # Connect MQTT Signals (Ensure these signals are defined above)
         self.mqtt_connection_updated.connect(self._handle_mqtt_connection_update)
         self.mqtt_message_received_signal.connect(self._route_incoming_mqtt_message)
-        # --------------------------
+
+        # Connect app signals
+        self.app.aboutToQuit.connect(self.cleanup)
 
         # Allow app to run without windows initially
         self.app.setQuitOnLastWindowClosed(False)
-        print("[Controller] Initialized. QuitOnLastWindowClosed set to False.")
+        print("[Controller] Initialized.") # Minimal print
 
+        # Start the application by showing the login window
         self.show_login_window()
 
     def show_login_window(self):
@@ -229,22 +239,38 @@ class ApplicationController(QObject):
 
     @Slot()
     def _start_delayed_node_list_request(self):
-        """Starts the timer to delay the node list request."""
+        """Starts the timer to delay the *initial* node list request."""
         if not self.meshtastic_handler or self._node_list_timer_active:
-             print("[Controller] Skipping delayed node list request (no handler or timer already active).")
+             # print("[Controller] Skipping delayed node list request...") # Optional print
              return
 
-        delay_ms = 5000 # Delay for 5 seconds
-        print(f"[Controller] Starting {delay_ms}ms timer for node list request...")
-        self._node_list_timer_active = True # Set flag
+        delay_ms = 5000 # 5 seconds delay for initial request
+        print(f"[Controller] Starting {delay_ms}ms timer for *initial* node list request...")
+        self._node_list_timer_active = True
+        # Note: This timer only runs ONCE for the initial delay
         QTimer.singleShot(delay_ms, self._emit_node_list_request_signal)
 
     @Slot()
     def _emit_node_list_request_signal(self):
+         """Emits signal for initial node list request and starts periodic timer."""
          if self.meshtastic_handler:
-              print("[Controller] Timer finished, emitting node list request signal.")
+              print("[Controller] Initial timer finished, emitting node list request signal.")
               self.meshtastic_handler._request_node_list_signal.emit()
-         self._node_list_timer_active = False # Reset flag
+              # **** Start the PERIODIC timer AFTER the initial request ****
+              print(f"[Controller] Starting periodic node update timer ({NODE_UPDATE_INTERVAL_MS} ms interval).")
+              self.node_update_timer.start(NODE_UPDATE_INTERVAL_MS)
+              # **********************************************************
+         self._node_list_timer_active = False # Reset flag for the single-shot timer
+
+    @Slot()
+    def _request_periodic_node_update(self):
+        """Slot called by the periodic timer to request node updates."""
+        print("[Controller] Periodic timer timeout.")
+        if self.meshtastic_handler and self.meshtastic_handler.is_running:
+            print("[Controller] Requesting periodic node list update from handler.")
+            self.meshtastic_handler.request_node_list()
+        else:
+            print("[Controller] Skipping periodic node update (handler not available or not running).")
 
     @Slot()
     def show_settings_window(self):
@@ -590,14 +616,20 @@ class ApplicationController(QObject):
         self.show_login_window()
 
     def _disconnect_mesh_handler(self):
-        self._node_list_timer_active = False # Reset timer flag on disconnect
+        print("[Controller] Stopping periodic node update timer.")
+        self.node_update_timer.stop() # Stop the timer
+        self._node_list_timer_active = False
         if self.meshtastic_handler:
             print("[Controller] Disconnecting Meshtastic handler signals...")
-            # --- Try to disconnect the new signal too ---
+            # ... (disconnect signals as before) ...
             try:
                  if hasattr(self,'_start_delayed_node_list_request') and self._start_delayed_node_list_request:
                       self.meshtastic_handler._connection_established_signal.disconnect(self._start_delayed_node_list_request)
             except (TypeError, RuntimeError) as e: print(f"  - Warn: Error disconnecting _connection_established_signal: {e}")
+            try:
+                 if hasattr(self,'handle_meshtastic_connection_status') and self.handle_meshtastic_connection_status:
+                     self.meshtastic_handler.connection_status.disconnect(self.handle_meshtastic_connection_status)
+            except (TypeError, RuntimeError) as e: print(f"  - Warn: Error disconnecting connection_status: {e}")
             try:
                  if hasattr(self,'route_incoming_message_from_mesh') and self.route_incoming_message_from_mesh:
                      self.meshtastic_handler.message_received.disconnect(self.route_incoming_message_from_mesh)
@@ -611,7 +643,6 @@ class ApplicationController(QObject):
             self.meshtastic_handler.disconnect()
             self.meshtastic_handler = None
             print("[Controller] Meshtastic handler disconnected and cleared.")
-
 
     def _disconnect_services(self):
         """Disconnects MQTT and Meshtastic."""
@@ -804,12 +835,12 @@ class ApplicationController(QObject):
 
     def cleanup(self):
         print("[Controller] cleanup CALLED.")
+        print("[Controller] Stopping periodic node update timer during cleanup.")
+        self.node_update_timer.stop() # Ensure timer stops on exit
         self._signing_off = True
         self._disconnect_services()
         print("[Controller] Cleanup finished.")
-
         self.app.setQuitOnLastWindowClosed(True)
-
 
 # --- Main Execution ---
 if __name__ == '__main__':
