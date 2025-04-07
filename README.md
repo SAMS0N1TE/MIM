@@ -50,13 +50,13 @@ These instructions will guide you through setting up the project on Windows or L
     ```bash
     pip install -r requirements.txt
     ```
-    This will install PySide6, paho-mqtt, meshtastic, pyserial, pygame, and pypubsub. [cite: uploaded:MIM_chat/main.py, uploaded:MIM/buddy_list_window.py, uploaded:MIM/chat_window.py, uploaded:MIM/login_window.py, uploaded:MIM/meshtastic_handler.py, uploaded:MIM/settings_window.py]
+    This will install PySide6, paho-mqtt, meshtastic, pyserial, pygame, and pypubsub.
 
 ## Configuration
 
-1.  Run the application for the first time: `python main.py` [cite: uploaded:MIM/main.py].
+1.  Run the application for the first time: `python main.py`.
 2.  The Sign On window will appear. Click **Get a Screen Name** (or the Setup icon).
-3.  In the Settings window [cite: uploaded:MIM/settings_window.py]:
+3.  In the Settings window:
     * Enter a **Screen Name** (required).
     * Configure **Meshtastic Node Connection** (Type and Details) if you want to use Meshtastic. Select 'None' otherwise.
     * Optionally, expand and configure **MQTT Server Settings** if you want to use MQTT.
@@ -71,11 +71,10 @@ These instructions will guide you through setting up the project on Windows or L
     ```bash
     python main.py
     ```
-    [cite: uploaded:MIM/main.py]
-3.  Enter your configured Screen Name in the Sign On window [cite: uploaded:MIM/login_window.py]. Enter the MQTT password if required by your broker.
+3.  Enter your configured Screen Name in the Sign On window. Enter the MQTT password if required by your broker.
 4.  Click **Sign On** (or the Sign On icon).
-5.  The Buddy List window should appear [cite: uploaded:MIM/buddy_list_window.py]. Meshtastic nodes should populate automatically after a short delay if configured and connected. MQTT buddies would need manual adding or presence implementation (not currently included).
-6.  Double-click a buddy or select one and click **IM** to open a chat window [cite: uploaded:MIM/chat_window.py].
+5.  The Buddy List window should appear. Meshtastic nodes should populate automatically after a short delay if configured and connected. MQTT buddies would need manual adding or presence implementation (not currently included).
+6.  Double-click a buddy or select one and click **IM** to open a chat window.
 
 ## License
 
