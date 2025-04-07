@@ -25,7 +25,7 @@ These instructions will guide you through setting up the project on Windows or L
 1.  **Clone the repository:**
     Open your terminal (Linux) or Command Prompt/PowerShell (Windows) and run:
     ```bash
-    git clone [https://github.com/SAMS0N1TE/MIM.git](https://github.com/SAMS0N1TE/MIM.git)
+    git clone https://github.com/SAMS0N1TE/MIM.git
     cd MIM
     ```
 
