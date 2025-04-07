@@ -64,19 +64,6 @@ These instructions will guide you through setting up the project on Windows or L
 5.  The Buddy List window should appear. Meshtastic nodes should populate automatically after a short delay if configured and connected. MQTT buddies would need manual adding or presence implementation (not currently included).
 6.  Double-click a buddy or select one and click **IM** to open a chat window.
 
-
-## Configuration
-
-1.  Run the application for the first time: `python main.py`.
-2.  The Sign On window will appear. Click **Get a Screen Name** (or the Setup icon).
-3.  In the Settings window:
-    * Enter a **Screen Name** (required).
-    * Configure **Meshtastic Node Connection** (Type and Details) if you want to use Meshtastic. Select 'None' otherwise.
-    * Optionally, expand and configure **MQTT Server Settings** if you want to use MQTT.
-    * Configure **General Settings** like Auto-Save Chats and Enable Sounds.
-    * Click **Save**.
-4.  The settings are saved to a configuration file in your user's application data directory.
-
 ## License
 
 This project is licensed under the Creative Commons Attribution-NonCommercial 4.0 International License.
