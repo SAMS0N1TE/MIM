@@ -2,6 +2,7 @@
 import sys
 import os
 import traceback # Import traceback for better error printing
+from typing import Dict, Any
 
 # Attempt to import pyserial, but allow fallback
 try:
@@ -29,6 +30,7 @@ def get_resource_path(relative_path):
 
 class SettingsWindow(QDialog):
     settings_saved = Signal(dict)
+    current_settings: Dict[str, Any]
 
     def __init__(self, current_settings=None, parent=None):
         super().__init__(parent)
@@ -104,6 +106,13 @@ class SettingsWindow(QDialog):
         self.enable_sounds_checkbox.setToolTip("Enable application sound effects.")
         general_layout.addWidget(self.enable_sounds_checkbox)
 
+        # <<< START NEW CODE >>>
+        self.enable_updates_checkbox = QCheckBox("Enable Update Notifications")
+        self.enable_updates_checkbox.setToolTip("Receive notifications about application updates (requires internet).")
+        self.enable_updates_checkbox.setChecked(True) # Default to enabled
+        general_layout.addWidget(self.enable_updates_checkbox)
+        # <<< END NEW CODE >>>
+
         main_layout.addWidget(general_group)
 
         # --- Standard Dialog Buttons ---
@@ -168,27 +177,27 @@ class SettingsWindow(QDialog):
     def load_initial_settings(self):
         """Populate dialog fields from the current_settings dictionary."""
         print(f"Loading settings into dialog: {self.current_settings}")
+        # Use self.current_settings for all .get() calls
         self.screen_name_input.setText(self.current_settings.get("screen_name", ""))
         self.mesh_connection_type.setCurrentText(self.current_settings.get("mesh_conn_type", "None"))
         self.mesh_connection_details.setText(self.current_settings.get("mesh_details", ""))
 
-        # Load Meshtastic Channel Index (Default to 0)
         default_channel_index = self.current_settings.get("meshtastic_channel_index", 0)
         self.mesh_channel_index_input.setText(str(default_channel_index))
 
-        # Load MQTT Settings
         mqtt_server = self.current_settings.get("server", "")
-        mqtt_enabled = bool(mqtt_server) # Enable section if server has a value
+        mqtt_enabled = bool(mqtt_server)
         self.mqtt_toggle_button.setChecked(mqtt_enabled)
-        self.toggle_mqtt_section(mqtt_enabled) # Update visibility based on loaded state
+        self.toggle_mqtt_section(mqtt_enabled)
         self.server_input.setText(mqtt_server)
         self.port_input.setText(str(self.current_settings.get("port", "1883")))
         self.username_input.setText(self.current_settings.get("username", ""))
-        self.password_input.setText(self.current_settings.get("password", "")) # Load password field
+        self.password_input.setText(self.current_settings.get("password", ""))
 
-        # Load General Settings
         self.auto_save_checkbox.setChecked(bool(self.current_settings.get("auto_save_chats", False)))
         self.enable_sounds_checkbox.setChecked(bool(self.current_settings.get("sounds_enabled", True)))
+        # Ensure this line for the update checkbox is present and correct
+        self.enable_updates_checkbox.setChecked(bool(self.current_settings.get("enable_update_notifications", True)))
 
     def get_settings(self):
         """Collects settings from the UI fields into a dictionary."""
@@ -209,6 +218,9 @@ class SettingsWindow(QDialog):
             "meshtastic_channel_index": channel_index,
             "auto_save_chats": self.auto_save_checkbox.isChecked(),
             "sounds_enabled": self.enable_sounds_checkbox.isChecked(),
+            # <<< START NEW CODE >>>
+            "enable_update_notifications": self.enable_updates_checkbox.isChecked(),
+            # <<< END NEW CODE >>>
             # Initialize MQTT keys
             "server": "",
             "port": 1883, # Default port
@@ -275,7 +287,8 @@ if __name__ == '__main__':
         "username": "user",
         "password": "pw",
         "auto_save_chats": True,
-        "sounds_enabled": False
+        "sounds_enabled": False,
+        "enable_update_notifications": True # Add for testing
     }
     settings_win = SettingsWindow(test_settings)
     if settings_win.exec(): # exec() shows the dialog modally
