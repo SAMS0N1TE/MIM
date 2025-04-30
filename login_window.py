@@ -1,4 +1,3 @@
-# login_window.py
 import sys
 import os
 from PySide6.QtWidgets import (
@@ -6,12 +5,9 @@ from PySide6.QtWidgets import (
     QPushButton, QFormLayout, QCheckBox, QSpacerItem,
     QSizePolicy, QFrame
 )
-# **** Added QFont needed in config ****
 from PySide6.QtGui import QPixmap, QFont, QFontDatabase, QIcon, QCursor, QKeySequence
-# **** Added QSize needed in config ****
 from PySide6.QtCore import Qt, Signal, QSize
 
-# --- Helper function ---
 def get_resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
@@ -19,20 +15,15 @@ def get_resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-# --- Configuration Settings ---
-
-# Colors
 LOGO_AREA_BG_COLOR = "#033b72"
 TITLE_COLOR = "white"
 LINK_BUTTON_COLOR = "blue"
 LINK_BUTTON_HOVER_COLOR = "darkblue"
 LINK_BUTTON_PRESSED_COLOR = "purple"
-# Icon button colors
 ICON_BUTTON_DEFAULT_BG_COLOR = "transparent"
 ICON_BUTTON_HOVER_BG_COLOR = "#c2c0b2"
 ICON_BUTTON_PRESSED_BG_COLOR = "#a8a699"
 
-# Fonts (Family, Size, Weight)
 TITLE_FONT_FAMILY = "Helvetica"
 TITLE_FONT_SIZE = 10
 TITLE_FONT_WEIGHT = QFont.Bold
@@ -40,7 +31,6 @@ LABEL_FONT_FAMILY = "Helvetica"
 LABEL_FONT_SIZE = 8
 LABEL_FONT_WEIGHT = QFont.Normal
 
-# Sizes
 LOGO_SIZE = QSize(90, 90)
 ICON_SIZE = QSize(60, 60)
 ICON_BUTTON_SIZE = QSize(ICON_SIZE.width() + 10, ICON_SIZE.height() + 10)
@@ -48,7 +38,6 @@ MIN_WINDOW_WIDTH = 240
 MIN_WINDOW_HEIGHT = 350
 MAX_WINDOW_WIDTH = 280
 
-# Layout Spacing & Margins (Left, Top, Right, Bottom)
 MAIN_LAYOUT_MARGINS = (0, 0, 0, 5)
 MAIN_LAYOUT_SPACING = 0
 LOGO_AREA_MARGINS = (10, 10, 10, 10)
@@ -59,17 +48,14 @@ CHECKBOX_TOP_MARGIN = 5
 BOTTOM_BAR_MARGINS = (5, 3, 5, 3)
 BOTTOM_BAR_SPACING = 8
 
-# Layout Stretch Factors
 LOGO_AREA_STRETCH = 1
 INPUT_AREA_STRETCH = 2
 
-# Icon Paths
-LOGO_ICON_PATH = "resources/icons/mim_logo.png"
+LOGO_ICON_PATH = "resources/icons/app_icon.png"
 HELP_ICON_PATH = "resources/icons/help_icon.png"
 SETUP_ICON_PATH = "resources/icons/setup_icon.png"
 SIGNON_ICON_PATH = "resources/icons/signon_icon.png"
 
-# --- Dynamic Styles ---
 LINK_STYLE = f"""
 QPushButton {{
     border: none;
@@ -93,12 +79,12 @@ QPushButton:pressed {{
 ICON_BUTTON_STYLE = f"""
 QPushButton {{
     background-color: {ICON_BUTTON_DEFAULT_BG_COLOR};
-    border: 1px solid transparent; /* Start flat */
-    padding: 4px; /* Adjust padding for icon spacing */
+    border: 1px solid transparent;
+    padding: 4px;
 }}
 QPushButton:hover {{
     background-color: {ICON_BUTTON_HOVER_BG_COLOR};
-    border: 1px solid #B0B0B0; /* Add a border color */
+    border: 1px solid #B0B0B0;
     border-style: outset;
 }}
 QPushButton:pressed {{
@@ -107,8 +93,6 @@ QPushButton:pressed {{
     border-style: inset;
 }}
 """
-
-# --- Login Window Class ---
 
 class LoginWindow(QWidget):
     setup_requested = Signal()
@@ -125,7 +109,6 @@ class LoginWindow(QWidget):
         main_layout.setContentsMargins(*MAIN_LAYOUT_MARGINS)
         main_layout.setSpacing(MAIN_LAYOUT_SPACING)
 
-        # --- Logo Area ---
         logo_frame = QFrame()
         logo_frame.setStyleSheet(f"background-color: {LOGO_AREA_BG_COLOR};")
         logo_layout = QVBoxLayout(logo_frame)
@@ -152,7 +135,6 @@ class LoginWindow(QWidget):
         logo_layout.addWidget(title_label)
         main_layout.addWidget(logo_frame, LOGO_AREA_STRETCH)
 
-        # --- Input Area ---
         input_area_widget = QWidget()
         input_layout = QVBoxLayout(input_area_widget)
         input_layout.setContentsMargins(*INPUT_AREA_MARGINS)
@@ -161,7 +143,6 @@ class LoginWindow(QWidget):
         input_form_layout = QVBoxLayout()
         input_form_layout.setSpacing(INPUT_AREA_SPACING)
 
-        # --- Screen Name Group ---
         screen_name_v_layout = QVBoxLayout()
         screen_name_v_layout.setSpacing(INPUT_LABEL_SPACING)
         screen_name_label = QLabel("ScreenName:")
@@ -174,7 +155,6 @@ class LoginWindow(QWidget):
         screen_name_v_layout.addWidget(self.screen_name_input)
         input_form_layout.addLayout(screen_name_v_layout)
 
-        # --- "Get a Screen Name" Link ---
         get_name_layout = QHBoxLayout()
         self.get_name_button = QPushButton("Get a Screen Name")
         self.get_name_button.setStyleSheet(LINK_STYLE)
@@ -184,7 +164,6 @@ class LoginWindow(QWidget):
         get_name_layout.addStretch(1)
         input_form_layout.addLayout(get_name_layout)
 
-        # --- Password Group ---
         password_v_layout = QVBoxLayout()
         password_v_layout.setSpacing(INPUT_LABEL_SPACING)
         password_label = QLabel("Password:")
@@ -197,7 +176,6 @@ class LoginWindow(QWidget):
         password_v_layout.addWidget(self.password_input)
         input_form_layout.addLayout(password_v_layout)
 
-        # --- Checkboxes ---
         checkbox_layout = QHBoxLayout()
         checkbox_layout.setContentsMargins(0, CHECKBOX_TOP_MARGIN, 0, 0)
         self.save_config_checkbox = QCheckBox("Save configuration")
@@ -221,14 +199,12 @@ class LoginWindow(QWidget):
         input_layout.addStretch(1)
         main_layout.addWidget(input_area_widget, INPUT_AREA_STRETCH)
 
-        # --- Bottom Button Bar ---
         bottom_bar = QFrame()
         bottom_bar.setFrameShape(QFrame.StyledPanel)
         bottom_layout = QHBoxLayout(bottom_bar)
         bottom_layout.setContentsMargins(*BOTTOM_BAR_MARGINS)
         bottom_layout.setSpacing(BOTTOM_BAR_SPACING)
 
-        # Create Icon-Only Buttons with updated config
         self.help_button = QPushButton("")
         self.help_button.setToolTip("Help")
         self.help_button.setStyleSheet(ICON_BUTTON_STYLE)
@@ -266,7 +242,6 @@ class LoginWindow(QWidget):
                  self.signon_button.setIconSize(ICON_SIZE)
         except Exception as e: print(f"Could not load signon icon: {e}")
 
-        # Add buttons to layout
         bottom_layout.addWidget(self.help_button)
         bottom_layout.addWidget(self.setup_button)
         bottom_layout.addStretch(1)
@@ -275,7 +250,6 @@ class LoginWindow(QWidget):
 
         main_layout.addWidget(bottom_bar)
 
-        # --- Connections ---
         self.setup_button.clicked.connect(self.setup_requested.emit)
         self.signon_button.clicked.connect(self.on_sign_on_clicked)
         self.help_button.clicked.connect(self.show_help_placeholder)
@@ -309,10 +283,3 @@ class LoginWindow(QWidget):
 
     def close_window(self):
         self.close()
-
-# --- Standalone Test ---
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    login_win = LoginWindow(saved_screen_name="TestUser", saved_auto_login=False)
-    login_win.show()
-    sys.exit(app.exec())
