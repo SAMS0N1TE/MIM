@@ -1,7 +1,7 @@
 # MIM - Meshtastic Instant Messenger
 
 An AIM-style chat client using PySide6 that connects via MQTT and/or Meshtastic for decentralized or server-based messaging. Includes optional sound effects and chat logging.
-
+![Screenshot_2025-05-04_14-03-31](https://github.com/user-attachments/assets/c9201331-ee25-4c79-8e14-008c186bd584)
 ## Features
 
 * Classic AIM-inspired interface (Buddy List, IM windows).
