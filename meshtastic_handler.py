@@ -22,12 +22,14 @@ from sound_utils import play_sound_async
 callback_counter = {"established": 0, "lost": 0, "receive": 0}
 BROADCAST_ADDR_INT = 0xffffffff
 BROADCAST_ADDR_STR = "^all"
+NODE_ACTIVE_TIMEOUT_SEC = 60 * 5  # 5 minutes
+
 
 class MeshtasticHandler(QObject):
     connection_status = Signal(bool, str)
-    # --- FIX: Updated signal signature ---
-    message_received = Signal(str, str, str, str) # sender_id (str), display_name (str), text (str), msg_type ('direct'/'broadcast')
+    message_received = Signal(str, str, str, str)
     node_list_updated = Signal(list)
+    channel_list_updated = Signal(list)
 
     _connection_established_signal = Signal()
 
@@ -45,6 +47,59 @@ class MeshtasticHandler(QObject):
 
         print("[Meshtastic Handler] Initialized.")
 
+
+    def _on_receive_packet(self, packet, interface):
+        global callback_counter
+        callback_counter["receive"] += 1
+
+        if interface != self.meshtastic_interface:
+            return
+
+
+        if not isinstance(packet, dict):
+            print(f"[Meshtastic Rx Warning] Unexpected packet type: {type(packet).__name__}")
+            return
+
+        from_id = packet.get('fromId')
+        to_id = packet.get('toId')
+        channel = packet.get('channel', 0)
+
+        my_node_id_str = None
+        if self.meshtastic_interface and self.meshtastic_interface.myInfo:
+            if self._my_node_num is not None:
+                my_node_id_str = f"!{self._my_node_num:x}"
+            elif hasattr(self.meshtastic_interface.myInfo, 'node_num_str'):
+                my_node_id_str = self.meshtastic_interface.myInfo.node_num_str
+
+        if from_id and from_id in self._nodes and (my_node_id_str is None or from_id != my_node_id_str):
+            self._nodes[from_id]['lastHeard'] = time.time()
+            self._nodes[from_id]['active_report'] = True
+
+
+        decoded = packet.get('decoded', {})
+
+        if 'text' in decoded:
+            self._handle_text_message(packet, interface)
+            return
+
+        port_num_val = decoded.get('portnum')
+        if port_num_val is None:
+            port_num_val = packet.get('portnum')
+
+        if port_num_val is None:
+            return
+
+        if port_num_val == PortNum.TEXT_MESSAGE_APP:
+            self._handle_text_message(packet, interface)
+        elif port_num_val == PortNum.POSITION_APP:
+            pass
+        elif port_num_val == PortNum.TELEMETRY_APP:
+            pass
+        elif port_num_val == PortNum.ROUTING_APP:
+            pass
+        else:
+            pass
+
     @Slot()
     def connect_to_device(self):
         conn_type = self.settings.get('mesh_conn_type', 'None')
@@ -54,6 +109,7 @@ class MeshtasticHandler(QObject):
         if self.meshtastic_interface and self.is_running:
             print("[Meshtastic Handler] Interface already exists and is running.")
             QTimer.singleShot(0, lambda: self.connection_status.emit(True, "Already connected"))
+            QTimer.singleShot(100, self.request_channel_list)
             return True
 
         if self.meshtastic_interface:
@@ -150,11 +206,12 @@ class MeshtasticHandler(QObject):
             self.is_running = True
             self._my_node_num = None
             try:
+                time.sleep(0.5)
                 if interface.myInfo and hasattr(interface.myInfo, 'my_node_num'):
                     self._my_node_num = interface.myInfo.my_node_num
                     print(f"[Meshtastic Handler CB] Successfully obtained My Node Number: {self._my_node_num:#010x} ({self._my_node_num})")
                 else:
-                    print("[Meshtastic Handler CB Warning] interface.myInfo or my_node_num attribute not available.")
+                    print("[Meshtastic Handler CB Warning] interface.myInfo or my_node_num attribute not available after delay.")
             except Exception as e:
                  print(f"[Meshtastic Handler CB Warning] Could not get own node number: {e}")
 
@@ -183,37 +240,6 @@ class MeshtasticHandler(QObject):
         else:
              print("[Meshtastic Warning] Connection lost event for unexpected/old interface. Ignoring.")
 
-
-    def _on_receive_packet(self, packet, interface):
-        node_id = packet.get('fromId')
-        if node_id:
-            current_time = time.time()
-            if node_id not in self._nodes: self._nodes[node_id] = {'nodeId': node_id}
-            self._nodes[node_id]['lastHeard'] = packet.get('rxTime', current_time)
-            # --- FIX: Update node info immediately on packet receive if possible ---
-            # This helps ensure the node name is available sooner
-            try:
-                node_info_from_packet = packet.get('user') # Or wherever user info might be in the packet structure
-                if node_info_from_packet and isinstance(node_info_from_packet, dict):
-                    self._nodes[node_id]['user'] = node_info_from_packet
-            except Exception: # Ignore errors updating cache from packet
-                pass
-
-        decoded_part = packet.get('decoded', {})
-        portnum = decoded_part.get('portnum')
-        payload = decoded_part.get('payload')
-
-        is_text_message = (portnum == 'TEXT_MESSAGE_APP')
-
-        if is_text_message and payload:
-            global callback_counter
-            callback_counter["receive"] += 1
-            sender_id_log = packet.get('fromId', 'Unknown')
-            to_id_log = packet.get('toId', 'Unknown')
-            channel_log = packet.get('channel', 'Unknown')
-            print(f"[Meshtastic Handler CB] <<< Processing Text Packet ({callback_counter['receive']}) From: {sender_id_log}, To: {to_id_log}, Ch: {channel_log} >>>")
-            self._handle_text_message(packet, interface)
-
     def _handle_text_message(self, packet, interface):
         sender_id = packet.get('fromId', 'Unknown')
         text = packet.get('decoded', {}).get('text', '')
@@ -222,8 +248,7 @@ class MeshtasticHandler(QObject):
             print("[Meshtastic Rx Warning] Received empty text message payload in decoded part.")
             return
 
-        # --- FIX: Look up display name ---
-        display_name = sender_id # Default to ID
+        display_name = sender_id
         if sender_id in self._nodes:
             node_info = self._nodes[sender_id]
             user_info = node_info.get('user', {})
@@ -233,9 +258,7 @@ class MeshtasticHandler(QObject):
                 display_name = long_name
             elif short_name:
                 display_name = short_name
-            # else: display_name remains sender_id
         print(f"[Meshtastic Rx Proc] Resolved sender: ID={sender_id}, DisplayName='{display_name}'")
-        # --- End Display Name Lookup ---
 
         raw_to_id = packet.get('toId')
         to_id = BROADCAST_ADDR_INT
@@ -249,37 +272,52 @@ class MeshtasticHandler(QObject):
                         to_id = int(raw_to_id[1:], 16)
                         print(f"[Meshtastic Rx Proc] Converted to_id string '{raw_to_id}' to int {to_id:#010x}")
                     except ValueError:
-                        print(f"[Meshtastic Rx Warning] Invalid hex format for to_id string '{raw_to_id}'. Defaulting to broadcast.")
+                        print(
+                            f"[Meshtastic Rx Warning] Invalid hex format for to_id string '{raw_to_id}'. Defaulting to broadcast.")
                         to_id = BROADCAST_ADDR_INT
                 elif raw_to_id == '^all':
-                     to_id = BROADCAST_ADDR_INT
-                     print(f"[Meshtastic Rx Proc] Converted to_id string '^all' to int {to_id:#010x}")
+                    to_id = BROADCAST_ADDR_INT
+                    print(f"[Meshtastic Rx Proc] Converted to_id string '^all' to int {to_id:#010x}")
                 else:
                     try:
-                         to_id = int(raw_to_id)
-                         print(f"[Meshtastic Rx Proc] Converted plain to_id string '{raw_to_id}' to int {to_id}")
+                        to_id = int(raw_to_id)
+                        print(f"[Meshtastic Rx Proc] Converted plain to_id string '{raw_to_id}' to int {to_id}")
                     except ValueError:
-                         print(f"[Meshtastic Rx Warning] Unrecognized to_id string format '{raw_to_id}'. Defaulting to broadcast.")
-                         to_id = BROADCAST_ADDR_INT
+                        print(
+                            f"[Meshtastic Rx Warning] Unrecognized to_id string format '{raw_to_id}'. Defaulting to broadcast.")
+                        to_id = BROADCAST_ADDR_INT
             else:
-                print(f"[Meshtastic Rx Warning] Unexpected type for to_id '{raw_to_id}' ({type(raw_to_id).__name__}). Defaulting to broadcast.")
+                print(
+                    f"[Meshtastic Rx Warning] Unexpected type for to_id '{raw_to_id}' ({type(raw_to_id).__name__}). Defaulting to broadcast.")
                 to_id = BROADCAST_ADDR_INT
         else:
-             print("[Meshtastic Rx Info] to_id missing from packet. Assuming broadcast.")
-             to_id = BROADCAST_ADDR_INT
+            print("[Meshtastic Rx Info] to_id missing from packet. Assuming broadcast.")
+            to_id = BROADCAST_ADDR_INT
 
         channel_index = packet.get('channel', 0)
 
         my_node_num_str = f"{self._my_node_num:#010x} ({self._my_node_num})" if self._my_node_num is not None else "None"
-        print(f"[Meshtastic Rx Proc] Raw Packet Info: From={sender_id}, To={to_id:#010x} ({to_id}), Ch={channel_index}, MyNode={my_node_num_str}, Text='{text}'")
+        print(
+            f"[Meshtastic Rx Proc] Raw Packet Info: From={sender_id}, To={to_id:#010x} ({to_id}), Ch={channel_index}, MyNode={my_node_num_str}, Text='{text}'")
 
-        to_id_type = type(to_id).__name__
-        my_node_num_type = type(self._my_node_num).__name__ if self._my_node_num is not None else "NoneType"
-        print(f"[Meshtastic Rx Proc] Checking Direct: Comparing ToId={to_id} (Type: {to_id_type}) with MyNodeNum={self._my_node_num} (Type: {my_node_num_type})")
+        print(
+            f"[Meshtastic Rx DEBUG] Comparing as numbers: to_id={to_id} (type={type(to_id).__name__}), my_node_num={self._my_node_num} (type={type(self._my_node_num).__name__})")
+
+        my_node_num_int = None
+        if self._my_node_num is not None:
+            try:
+                if isinstance(self._my_node_num, str) and self._my_node_num.startswith('!'):
+                    my_node_num_int = int(self._my_node_num[1:], 16)
+                else:
+                    my_node_num_int = int(self._my_node_num)
+            except (ValueError, TypeError):
+                print(f"[Meshtastic Rx Warning] Could not convert my_node_num '{self._my_node_num}' to integer.")
 
         is_direct = False
-        if self._my_node_num is not None:
-             is_direct = (to_id == self._my_node_num)
+        if my_node_num_int is not None:
+            is_direct = (to_id == my_node_num_int)
+            print(
+                f"[Meshtastic Rx DEBUG] Direct comparison result: {is_direct} (compared {to_id} == {my_node_num_int})")
 
         is_explicit_broadcast = (to_id == BROADCAST_ADDR_INT)
         is_primary_channel = (channel_index == 0)
@@ -292,54 +330,162 @@ class MeshtasticHandler(QObject):
             msg_type = 'broadcast'
             print(f"[Meshtastic Rx Proc] Classified as: BROADCAST (Ch=0 and ToId=BroadcastAddr)")
         else:
-            print(f"[Meshtastic Rx Proc] Ignoring message: Not direct to self or primary channel broadcast (To: {to_id:#010x}, Ch: {channel_index})")
+            print(
+                f"[Meshtastic Rx Proc] Ignoring message: Not direct to self or primary channel broadcast (To: {to_id:#010x}, Ch: {channel_index})")
             return
 
-        # --- FIX: Emit display_name with signal ---
+        if sender_id in self._nodes:
+            self._nodes[sender_id]['active_report'] = True
+            self._nodes[sender_id]['lastHeard'] = time.time()
+            print(f"[Meshtastic Rx] Marked node {sender_id} as active after receiving message")
+
         if msg_type == 'broadcast':
-             print(f"[Meshtastic Rx Proc] Emitting 'broadcast' message: SenderID={sender_id}, DisplayName='{display_name}', Text='{text[:20]}...'")
-             self.message_received.emit(sender_id, display_name, text, 'broadcast')
+            print(
+                f"[Meshtastic Rx Proc] Emitting 'broadcast' message: SenderID={sender_id}, DisplayName='{display_name}', Text='{text[:20]}...'")
+            self.message_received.emit(sender_id, display_name, text, 'broadcast')
         elif msg_type == 'direct':
-             print(f"[Meshtastic Rx Proc] Emitting 'direct' message: SenderID={sender_id}, DisplayName='{display_name}', Text='{text[:20]}...'")
-             self.message_received.emit(sender_id, display_name, text, 'direct')
+            print(
+                f"[Meshtastic Rx Proc] Emitting 'direct' message: SenderID={sender_id}, DisplayName='{display_name}', Text='{text[:20]}...'")
+            self.message_received.emit(sender_id, display_name, text, 'direct')
 
 
     @Slot()
     def request_node_list(self):
         if not self.meshtastic_interface or not self.is_running:
+            self.node_list_updated.emit([])
             return
         try:
             current_nodes_dict = self.meshtastic_interface.nodes
 
             if current_nodes_dict is None:
-                print("[Meshtastic Handler] Node list is 'None'.")
+                print("[Meshtastic Handler] Node list is 'None' from interface.")
                 self.node_list_updated.emit([])
                 return
             if not current_nodes_dict:
                 self.node_list_updated.emit([])
                 return
 
-            node_list_data = list(current_nodes_dict.values())
+            for node_id, node_data_from_lib in current_nodes_dict.items():
+                if node_id == "!4357ebfc":
+                    print(f"[DEBUG MH MAP] Node !4357ebfc data from lib: {node_data_from_lib}")
+                    print(f"[DEBUG MH MAP] Position for !4357ebfc from lib: {node_data_from_lib.get('position')}")
 
-            if not node_list_data or not isinstance(node_list_data[0], dict):
-                print(f"[Meshtastic Handler] Invalid node data format received: {node_list_data}")
+                lh_value_from_lib = node_data_from_lib.get('lastHeard')
+                sanitized_lh = 0.0
+                if lh_value_from_lib is not None:
+                    try:
+                        sanitized_lh = float(lh_value_from_lib)
+                    except (ValueError, TypeError):
+                        pass
+                node_data_from_lib['lastHeard'] = sanitized_lh
+
+                current_active_report_state = self._nodes.get(node_id, {}).get('active_report', False)
+
+                self._nodes[node_id] = node_data_from_lib
+
+                if 'active_report' in self._nodes[node_id]:
+                    self._nodes[node_id]['active_report'] = current_active_report_state
+                else:
+                    self._nodes[node_id]['active_report'] = False
+
+            node_list_to_emit = list(self._nodes.values())
+            if node_list_to_emit and not all(isinstance(n, dict) for n in node_list_to_emit):
+                print(f"[Meshtastic Handler Error] Invalid node data format in list to emit.")
                 self.node_list_updated.emit([])
                 return
 
-            self._nodes = current_nodes_dict
-            self.node_list_updated.emit(node_list_data)
+            self.node_list_updated.emit(node_list_to_emit)
 
         except mesh_interface.MeshInterfaceError as mesh_err:
             print(f"[Meshtastic Error] Failed fetching nodes (MeshInterfaceError): {mesh_err}")
+            self.node_list_updated.emit(list(self._nodes.values()))
         except AttributeError as ae:
-             print(f"[Meshtastic Error] Failed fetching nodes, interface might be closing (AttributeError): {ae}")
+            print(f"[Meshtastic Error] Failed fetching nodes, interface might be closing (AttributeError): {ae}")
+            self.node_list_updated.emit(list(self._nodes.values()))
         except Exception as e:
             print(f"[Meshtastic Error] Unexpected error fetching node list: {e}")
             traceback.print_exc()
+            self.node_list_updated.emit(list(self._nodes.values()))
+
+    def reset_active_flags(self):
+        """Reset all active_report flags and mark old nodes as inactive.
+        This should be called periodically."""
+        current_time = time.time()
+        for node_id, node_data in self._nodes.items():
+            last_heard_val = node_data.get("lastHeard")
+
+            lh_for_calculation = 0.0  # Default
+            if last_heard_val is not None:
+                try:
+                    lh_for_calculation = float(last_heard_val)
+                except (ValueError, TypeError):
+                    print(
+                        f"[Meshtastic Handler Warning] Node {node_id} had unconvertible lastHeard '{last_heard_val}' in reset_active_flags. Using 0.0.")
+
+            time_diff = current_time - lh_for_calculation
+
+            if time_diff > NODE_ACTIVE_TIMEOUT_SEC:
+                if node_data.get('active_report', False):
+                    print(f"[Meshtastic Handler] Node {node_id} marked inactive due to timeout ({time_diff:.1f}s).")
+                node_data['active_report'] = False
+            else:
+                if node_data.get('active_report', False):
+                    pass
+                node_data['active_report'] = False
+
+    @Slot()
+    def request_channel_list(self):
+        print("[Meshtastic Handler] Requesting channel list...")
+        if not self.meshtastic_interface or not self.is_running:
+            print("[Meshtastic Handler] Cannot request channel list: not connected/running.")
+            self.channel_list_updated.emit([])
+            return
+
+        try:
+            if not hasattr(self.meshtastic_interface, 'localNode') or not self.meshtastic_interface.localNode:
+                 print("[Meshtastic Handler] Error: localNode not available on interface.")
+                 self.channel_list_updated.emit([])
+                 return
+
+            channels = getattr(self.meshtastic_interface.localNode, 'channels', None)
+            if channels is None:
+                 print("[Meshtastic Handler] localNode returned None for channels.")
+                 self.channel_list_updated.emit([])
+                 return
+
+            channel_data_list = []
+            for i, ch in enumerate(channels):
+                ch_settings = getattr(ch, 'settings', None)
+                if ch_settings:
+                    name = getattr(ch_settings, 'name', '') or (f"Primary" if i == 0 else f"Channel {i}")
+                    psk = getattr(ch_settings, 'psk', b'')
+                    is_encrypted = bool(psk)
+                    channel_data_list.append({
+                        'index': i,
+                        'name': name,
+                        'encrypted': is_encrypted
+                    })
+                else:
+                     print(f"[Meshtastic Handler] Warning: Channel at index {i} has no settings attribute.")
+
+            print(f"[Meshtastic Handler] Channels fetched: Count={len(channel_data_list)}")
+            self.channel_list_updated.emit(channel_data_list)
+
+        except AttributeError as ae:
+            print(f"[Meshtastic Handler] Error accessing channel attribute: {ae} (library version?).")
+            self.channel_list_updated.emit([])
+        except Exception as e:
+            print(f"[Meshtastic Error] Unexpected error fetching channel list: {e}")
+            traceback.print_exc()
+            self.channel_list_updated.emit([])
+
+    def get_latest_nodes(self) -> list:
+        return list(self._nodes.values())
 
     @Slot(str, str, int)
     def send_message(self, destination_id, text, channel_index=0):
-        print(f"[Meshtastic Handler] send_message CALLED: Dest={destination_id}, Chan={channel_index}, Text='{text[:20]}...'")
+        print(
+            f"[Meshtastic Handler] send_message CALLED: Dest={destination_id}, Chan={channel_index}, Text='{text[:20]}...'")
         if not self.meshtastic_interface or not self.is_running:
             print("[Meshtastic Handler] Cannot send message: not connected/running.")
             return
@@ -354,6 +500,15 @@ class MeshtasticHandler(QObject):
                 channelIndex=channel_index
             )
             print("[Meshtastic Tx] Message queued successfully.")
+
+            if self._my_node_num is not None:
+                node_id = f"!{self._my_node_num:x}"
+                if node_id in self._nodes:
+                    self._nodes[node_id]['active_report'] = True
+                    self._nodes[node_id]['lastHeard'] = time.time()
+                    print(f"[Meshtastic Tx] Updated own node {node_id} to active status")
+                else:
+                    print(f"[Meshtastic Tx] Warning: Couldn't find own node {node_id} in nodes list")
 
         except mesh_interface.MeshInterfaceError as mesh_err:
             print(f"[Meshtastic Tx Error] MeshInterfaceError: {mesh_err}")
