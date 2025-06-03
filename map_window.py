@@ -191,16 +191,6 @@ class MapWindow(QMainWindow):
             if updates_to_process:
                 self._push_nodes(updates_to_process)
 
-    @Slot()
-    def _handle_map_js_ready(self):
-        self._map_js_ready = True
-        print("[MapWindow] Map JavaScript is ready according to Python timer.")
-        if self._pending_node_updates:
-            updates_to_process = list(self._pending_node_updates)
-            self._pending_node_updates = []
-            if updates_to_process:
-                self._push_nodes(updates_to_process)
-
     def load_initial_map(self):
         u = ""
         off = False
