@@ -41,7 +41,8 @@ class ChatWindow(QMainWindow):
         self.my_screen_name = my_screen_name
         self.buddy_id = buddy_id
         self.display_name = display_name
-        self.is_public_chat = (self.buddy_id == PUBLIC_CHAT_ID)
+        self._network_type = 'unknown'
+
         self.auto_save_enabled = auto_save_enabled
         self.log_file_path = None
 
@@ -51,12 +52,11 @@ class ChatWindow(QMainWindow):
                 log_dir.mkdir(parents=True, exist_ok=True)
                 safe_buddy_id = sanitize_filename(self.buddy_id)
                 self.log_file_path = log_dir / f"{safe_buddy_id}.log"
-                print(f"[ChatWindow] Logging enabled for {self.display_name} ({self.buddy_id}) -> {self.log_file_path}")
-            except Exception as e:
-                print(f"[ChatWindow] ERROR setting up log path for {self.display_name} ({self.buddy_id}): {e}")
+            except Exception:
                 self.auto_save_enabled = False
         if not self.auto_save_enabled:
-             print(f"[ChatWindow] Logging disabled for {self.display_name} ({self.buddy_id}). AutoSave={auto_save_enabled}, BaseDir={logs_base_dir}")
+             pass
+
 
         self.setWindowTitle(self.display_name)
         self.setMinimumSize(400, 350)
@@ -96,8 +96,11 @@ class ChatWindow(QMainWindow):
         self.message_input.currentCharFormatChanged.connect(self.update_format_button_states)
         self.send_button.clicked.connect(self.send_message)
 
-        status_text = f"Public Chat" if self.is_public_chat else f"Chatting with {self.display_name} ({self.buddy_id})"
+        status_text = f"Chatting with {self.display_name}"
+        if self.buddy_id == PUBLIC_CHAT_ID: status_text = "Public Chat"
+        elif self._network_type == 'mqtt': status_text = f"Chatting on Topic: {self.buddy_id}"
         self.statusBar().showMessage(status_text)
+
 
         self._set_default_formatting()
         self._load_history()
@@ -106,7 +109,6 @@ class ChatWindow(QMainWindow):
         default_font_family="Helvetica"; default_font_size=10
         available_families=QFontDatabase.families()
         if default_font_family not in available_families:
-             print(f"Warn: Default font '{default_font_family}' not found. Using application default.")
              self.current_font=QFont()
              self.current_font.setPointSize(default_font_size)
         else:
@@ -262,7 +264,9 @@ class ChatWindow(QMainWindow):
 
     def format_message(self, sender_display_name, message_text, color=None, font=None):
         display_font = font if font else self.current_font
+        # Use different color for self vs others
         display_color = color if color is not None else (Qt.blue if sender_display_name != self.my_screen_name else self.current_color)
+
 
         clr_name = QColor(display_color).name()
         family = display_font.family()
@@ -283,14 +287,13 @@ class ChatWindow(QMainWindow):
         try:
             log_line = f"[{timestamp.isoformat()}] {sender}: {message_text}\n"
             with open(self.log_file_path, 'a', encoding='utf-8') as f: f.write(log_line)
-        except IOError as e: print(f"[ChatWindow] Error writing to log file {self.log_file_path}: {e}")
-        except Exception as e: print(f"[ChatWindow] Unexpected error saving log: {e}")
+        except IOError: pass
+        except Exception: pass
 
     def _load_history(self):
         if not self.auto_save_enabled or not self.log_file_path: return
-        if not self.log_file_path.exists(): print(f"[ChatWindow] Log file not found: {self.log_file_path}"); return
+        if not self.log_file_path.exists(): return
 
-        print(f"[ChatWindow] Loading history from: {self.log_file_path}")
         loaded_count = 0
         try:
             log_content = self.log_file_path.read_text(encoding='utf-8')
@@ -306,15 +309,14 @@ class ChatWindow(QMainWindow):
                     self.message_display.append(fmt_line)
                     loaded_count += 1
                 else:
-                    print(f"[ChatWindow] Could not parse log line: {line}")
+                    pass
 
             if loaded_count > 0:
                  self.message_display.moveCursor(QTextCursor.End)
-                 print(f"[ChatWindow] Loaded {loaded_count} lines.")
                  self.statusBar().showMessage(f"Loaded {loaded_count} history messages.", 3000)
-            else: print("[ChatWindow] Log file empty or unparseable.")
-        except IOError as e: print(f"[ChatWindow] Error reading log file {self.log_file_path}: {e}"); self.statusBar().showMessage("Error loading history.", 3000)
-        except Exception as e: print(f"[ChatWindow] Unexpected error loading history: {e}"); self.statusBar().showMessage("Error loading history.", 3000)
+            else: pass
+        except IOError: self.statusBar().showMessage("Error loading history.", 3000)
+        except Exception: self.statusBar().showMessage("Error loading history.", 3000)
 
     def save_conversation_manually(self):
         from PySide6.QtWidgets import QFileDialog
@@ -346,13 +348,16 @@ class ChatWindow(QMainWindow):
         display_color = current_input_format.foreground().color()
         display_font = current_input_format.font()
 
+        # When sending, the "sender" is always self, display_name is my_screen_name
         formatted_msg_html = self.format_message(self.my_screen_name, message_text_plain, display_color, display_font)
         self.message_display.append(formatted_msg_html)
         self.message_display.moveCursor(QTextCursor.End)
 
         timestamp = datetime.datetime.now(datetime.timezone.utc)
+        # Save with my_screen_name as sender
         self._save_message(timestamp, self.my_screen_name, message_text_plain)
 
+        # message_sent signal carries recipient_id (buddy_id or topic) and the plain text
         self.message_sent.emit(self.buddy_id, message_text_plain)
 
         play_sound_async("send.wav")
@@ -360,13 +365,14 @@ class ChatWindow(QMainWindow):
         self.message_input.clear()
         self.message_input.setFocus()
 
-    # --- FIX: Updated parameter name and usage ---
     def receive_message(self, message_text, sender_display_name=None):
-        # Determine the display name for the sender
-        # If sender_display_name is provided use it, otherwise use self.display_name (for direct IMs where only buddy_id is known initially)
-        actual_sender_display = sender_display_name if sender_display_name else self.display_name
+        if sender_display_name == self.my_screen_name:
+            return
 
-        formatted_msg_html = self.format_message(actual_sender_display, message_text, color=Qt.blue, font=self.current_font)
+        actual_sender_display = sender_display_name if sender_display_name else "Unknown Sender"
+
+        formatted_msg_html = self.format_message(actual_sender_display, message_text, color=Qt.blue,
+                                                 font=self.current_font)
         self.message_display.append(formatted_msg_html)
         self.message_display.moveCursor(QTextCursor.End)
 
@@ -385,6 +391,5 @@ class ChatWindow(QMainWindow):
         return super().eventFilter(watched_object, event)
 
     def closeEvent(self, event):
-        print(f"[ChatWindow] closeEvent for {self.buddy_id}.")
         self.closing.emit(self.buddy_id)
         event.accept()
