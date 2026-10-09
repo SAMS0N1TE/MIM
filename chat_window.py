@@ -18,12 +18,7 @@ from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QSize, QStandardPaths
 
 PUBLIC_CHAT_ID = "^all"
 
-def get_resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from resources import get_resource_path
 
 def sanitize_filename(filename):
     if not filename: return "_invalid_id_"
@@ -58,8 +53,9 @@ class ChatWindow(QMainWindow):
              pass
 
 
-        self.setWindowTitle(self.display_name)
-        self.setMinimumSize(400, 350)
+        self.setWindowTitle(f"{self.display_name} - Instant Message")
+        self.setMinimumSize(400, 300)
+        self.resize(470, 360)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -77,17 +73,22 @@ class ChatWindow(QMainWindow):
         input_layout = QHBoxLayout()
         input_layout.setSpacing(3)
         self.message_input = QTextEdit()
-        self.message_input.setFixedHeight(60)
+        self.message_input.setFixedHeight(78)
+        self.message_input.setAcceptRichText(False)
+        self.message_input.setAccessibleName("Message")
         self.message_input.installEventFilter(self)
-        self.send_button = QPushButton()
-        send_icon=QIcon(get_resource_path("resources/icons/send_icon.png"))
-        if not send_icon.isNull(): self.send_button.setIcon(send_icon); self.send_button.setIconSize(QSize(24, 24)); self.send_button.setFixedSize(QSize(32, 32)); self.send_button.setToolTip("Send (Enter)"); self.send_button.setStyleSheet("QPushButton{padding:2px;}")
-        else: self.send_button.setText("Send")
+        self.send_button = QPushButton("&Send")
+        self.send_button.setToolTip("Send (Enter); Shift+Enter for a new line")
+        self.send_button.setEnabled(False)
+        self.message_input.textChanged.connect(lambda: self.send_button.setEnabled(bool(self.message_input.toPlainText().strip())))
         input_layout.addWidget(self.message_input, 1)
-        input_layout.addWidget(self.send_button)
 
         main_layout.addWidget(self.formatting_toolbar)
         main_layout.addLayout(input_layout)
+        send_row = QHBoxLayout()
+        send_row.addStretch()
+        send_row.addWidget(self.send_button)
+        main_layout.addLayout(send_row)
 
         self._create_menu_bar()
         self._create_format_actions()
@@ -104,9 +105,11 @@ class ChatWindow(QMainWindow):
 
         self._set_default_formatting()
         self._load_history()
+        from classic_chrome import install_chrome
+        install_chrome(self)
 
     def _set_default_formatting(self):
-        default_font_family="Helvetica"; default_font_size=10
+        default_font_family="Arial"; default_font_size=10
         available_families=QFontDatabase.families()
         if default_font_family not in available_families:
              self.current_font=QFont()
@@ -193,12 +196,12 @@ class ChatWindow(QMainWindow):
         self.underline_action.triggered.connect(self.toggle_underline)
         link_icon = QIcon(os.path.join(icon_base, "link.png"))
         self.link_action = QAction(link_icon, "&Link...", self)
-        self.link_action.setToolTip("Insert Link (Placeholder)")
-        self.link_action.triggered.connect(self.insert_link_placeholder)
+        self.link_action.setToolTip("Insert Link")
+        self.link_action.triggered.connect(self.insert_link)
         smiley_icon = QIcon(os.path.join(icon_base, "smiley.png"))
         self.smiley_action = QAction(smiley_icon, "&Smiley...", self)
-        self.smiley_action.setToolTip("Insert Smiley (Placeholder)")
-        self.smiley_action.triggered.connect(self.insert_smiley_placeholder)
+        self.smiley_action.setToolTip("Insert Smiley")
+        self.smiley_action.triggered.connect(self.insert_smiley)
 
     def _populate_formatting_toolbar(self, toolbar):
         toolbar.addAction(self.font_action)
@@ -229,12 +232,16 @@ class ChatWindow(QMainWindow):
     def toggle_italic(self): self.set_selected_text_format("italic", self.italic_action.isChecked())
     def toggle_underline(self): self.set_selected_text_format("underline", self.underline_action.isChecked())
 
-    def insert_link_placeholder(self):
-        cursor=self.message_input.textCursor()
-        if not cursor.isNull(): cursor.insertText(" [link] ")
+    def insert_link(self):
+        url, accepted = QInputDialog.getText(self, "Insert Link", "Web address (https://):")
+        if accepted and url.strip():
+            if not url.strip().startswith(("https://", "http://")):
+                QMessageBox.warning(self, "Insert Link", "Enter an http:// or https:// address.")
+                return
+            self.message_input.textCursor().insertText(url.strip())
         self.message_input.setFocus()
 
-    def insert_smiley_placeholder(self):
+    def insert_smiley(self):
         cursor=self.message_input.textCursor()
         if not cursor.isNull(): cursor.insertText(" :) ")
         self.message_input.setFocus()
@@ -269,7 +276,7 @@ class ChatWindow(QMainWindow):
 
 
         clr_name = QColor(display_color).name()
-        family = display_font.family()
+        family = html.escape(display_font.family(), quote=True)
         size = display_font.pointSize()
         weight = 'bold' if display_font.bold() else 'normal'
         style = 'italic' if display_font.italic() else 'normal'
@@ -279,7 +286,8 @@ class ChatWindow(QMainWindow):
         safe_message = html.escape(message_text).replace('\n', '<br>')
 
         style_attr = f"font-family:'{family}'; font-size:{size}pt; color:{clr_name}; font-weight:{weight}; font-style:{style}; text-decoration:{decoration};"
-        formatted_html = f'<span style="{style_attr}"><b>{safe_sender}:</b> {safe_message}</span>'
+        name_color = '#0000ff' if sender_display_name == self.my_screen_name else '#ff0000'
+        formatted_html = f'<b style="color:{name_color}">{safe_sender}:</b> <span style="{style_attr}">{safe_message}</span>'
         return formatted_html
 
     def _save_message(self, timestamp, sender, message_text):
@@ -358,6 +366,7 @@ class ChatWindow(QMainWindow):
         self._save_message(timestamp, self.my_screen_name, message_text_plain)
 
         # message_sent signal carries recipient_id (buddy_id or topic) and the plain text
+        self.statusBar().showMessage("Queued locally; awaiting transport result")
         self.message_sent.emit(self.buddy_id, message_text_plain)
 
         play_sound_async("send.wav")
@@ -366,12 +375,9 @@ class ChatWindow(QMainWindow):
         self.message_input.setFocus()
 
     def receive_message(self, message_text, sender_display_name=None):
-        if sender_display_name == self.my_screen_name:
-            return
-
         actual_sender_display = sender_display_name if sender_display_name else "Unknown Sender"
 
-        formatted_msg_html = self.format_message(actual_sender_display, message_text, color=Qt.blue,
+        formatted_msg_html = self.format_message(actual_sender_display, message_text, color=Qt.black,
                                                  font=self.current_font)
         self.message_display.append(formatted_msg_html)
         self.message_display.moveCursor(QTextCursor.End)

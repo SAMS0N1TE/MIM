@@ -1,0 +1,32 @@
+[project]
+name = "mim-desktop"
+version = "0.2.0"
+description = "Classic desktop messaging over Meshtastic, MeshCore and MQTT"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.8,<7",
+  "paho-mqtt>=2.1,<3",
+  "meshtastic>=2.7,<3",
+  "meshcore>=2,<3",
+  "pyserial>=3.5,<4",
+  "pygame>=2.6,<3",
+  "pypubsub>=4,<5",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1", "pyinstaller>=6,<7"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+exclude = [".venv"]
+
+[tool.ruff.lint]
+# Establish a correctness gate without reformatting every legacy file.
+select = ["E9", "F63", "F7", "F82"]

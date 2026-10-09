@@ -72,7 +72,11 @@ class MapWindow(QMainWindow):
                                   str(uuid.uuid4()))
 
             current_node_entry = self._node_data.get(node_id_from_input, {})
-            current_node_entry.update(n_data_from_input)
+            for key, value in n_data_from_input.items():
+                if isinstance(value, dict) and isinstance(current_node_entry.get(key), dict):
+                    current_node_entry[key].update(value)
+                else:
+                    current_node_entry[key] = value
 
             last_heard_val = current_node_entry.get('lastHeard')
             sanitized_lh_map = 0.0
@@ -269,8 +273,10 @@ class MapWindow(QMainWindow):
             if (n.position && n.position.latitude != null && n.position.longitude != null) {{
                 const nodeId = n.user.id;
                 const coords = [n.position.latitude, n.position.longitude];
-                const name = n.user.longName || n.user.shortName || nodeId;
-                const snr = n.snr !== undefined && n.snr !== null ? n.snr.toFixed(1) : 'N/A';
+                const nameElement = document.createElement('span');
+                nameElement.textContent = n.user.longName || n.user.shortName || nodeId;
+                const name = nameElement.innerHTML;
+                const snr = n.snr !== undefined && n.snr !== null && Number.isFinite(Number(n.snr)) ? Number(n.snr).toFixed(1) : 'N/A';
                 const lat_val = parseFloat(n.position.latitude); // Ensure numbers
                 const lon_val = parseFloat(n.position.longitude);
                 const lat_str = lat_val.toFixed(5);
@@ -279,8 +285,9 @@ class MapWindow(QMainWindow):
 
                 let metricsHTML = '';
                 if (n.deviceMetrics) {{
-                    const batt = n.deviceMetrics.batteryLevel;
-                    if (batt !== undefined && batt !== null) metricsHTML += '<br/><small>Batt: ' + batt + '%</small>';
+                    const rawBattery = n.deviceMetrics.batteryLevel;
+                    const batt = Number(rawBattery);
+                    if (rawBattery !== undefined && rawBattery !== null && Number.isFinite(batt)) metricsHTML += '<br/><small>Batt: ' + batt + '%</small>';
                 }}
 
                 const popupHTML = '<b>' + name + '</b><br/>Lat: ' + lat_str + ', Lon: ' + lon_str + '<br/>Last Heard: ' + ts + '<br/>SNR: ' + snr + metricsHTML;
@@ -312,11 +319,11 @@ class MapWindow(QMainWindow):
     }};
 
     var mymap = L.map('mapid').setView([{str(lat)}, {str(lon)}], {str(zoom)});
-    var tileUrl = '{u}';
+    var tileUrl = {json.dumps(u)};
     var opts = {{maxZoom: 19, tms: false}};
 
     if ({str(off).lower()}) {{
-        var p = encodeURIComponent('{d}').replace(/%2F/g, '/');
+        var p = encodeURIComponent({json.dumps(d)}).replace(/%2F/g, '/');
         tileUrl = 'file:///' + p + '/{{z}}/{{x}}/{{y}}.png';
     }}
     L.tileLayer(tileUrl, opts).addTo(mymap);

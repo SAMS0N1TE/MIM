@@ -18,12 +18,7 @@ from PySide6.QtCore import Qt, Signal, QTimer, QSize
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 
 
-def get_resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from resources import get_resource_path
 
 
 class SettingsWindow(QDialog):
@@ -85,8 +80,8 @@ class SettingsWindow(QDialog):
 
         self._create_pages()
 
-        self._add_category_and_page("Meshtastic Node", self.meshtastic_page)
-        self._add_category_and_page("Meshtastic Channels", self.channels_page)
+        self._add_category_and_page("Radio", self.meshtastic_page)
+        self._add_category_and_page("Radio Channels", self.channels_page)
         self._add_category_and_page("MQTT Server", self.mqtt_server_page)
         self._add_category_and_page("MQTT Groups", self.mqtt_groups_page)
         self._add_category_and_page("Buddy Groups", self.buddy_groups_page)
@@ -121,7 +116,7 @@ class SettingsWindow(QDialog):
 
 
     def _create_pages(self):
-        # Meshtastic Node Settings
+        # Radio Settings
         self.meshtastic_page = QWidget()
         mesh_group = QGroupBox("Node Connection & Identity")
         mesh_form_layout = QFormLayout(mesh_group)
@@ -129,6 +124,9 @@ class SettingsWindow(QDialog):
         self.screen_name_input = QLineEdit()
         self.screen_name_input.setPlaceholderText("Alias for your node (required)")
         mesh_form_layout.addRow("Screen Name:", self.screen_name_input)
+        self.mesh_protocol = QComboBox()
+        self.mesh_protocol.addItems(["Meshtastic", "MeshCore"])
+        mesh_form_layout.addRow("Radio protocol:", self.mesh_protocol)
         self.mesh_connection_type = QComboBox()
         self.mesh_connection_type.addItems(["None", "Serial", "Network (IP)"])
         mesh_form_layout.addRow("Connection:", self.mesh_connection_type)
@@ -138,7 +136,7 @@ class SettingsWindow(QDialog):
         mesh_form_layout.addRow("Details:", self.mesh_connection_details)
         self.mesh_channel_index_input = QLineEdit()
         self.mesh_channel_index_input.setPlaceholderText("Usually 0")
-        self.mesh_channel_index_input.setToolTip("Default channel index for sending Meshtastic messages (0=Primary).")
+        self.mesh_channel_index_input.setToolTip("Default channel index for sending radio messages (0=Primary).")
         mesh_form_layout.addRow("Default Send Channel Index:", self.mesh_channel_index_input)
         meshtastic_page_layout = QVBoxLayout(self.meshtastic_page)
         meshtastic_page_layout.addWidget(mesh_group)
@@ -184,9 +182,13 @@ class SettingsWindow(QDialog):
         self.port_input = QLineEdit("1883")
         self.username_input = QLineEdit()
         self.password_input = QLineEdit()
+        self.password_input.setEnabled(False)
+        self.password_input.setPlaceholderText("Enter at sign on; never saved to disk")
         self.password_input.setEchoMode(QLineEdit.Password)
         mqtt_settings_layout.addRow("Server:", self.server_input)
         mqtt_settings_layout.addRow("Port:", self.port_input)
+        self.mqtt_tls_checkbox = QCheckBox("Use TLS (verify broker certificate)")
+        mqtt_settings_layout.addRow("Security:", self.mqtt_tls_checkbox)
         mqtt_settings_layout.addRow("Username:", self.username_input)
         mqtt_settings_layout.addRow("Password:", self.password_input)
 
@@ -353,7 +355,7 @@ class SettingsWindow(QDialog):
             index = ch_data.get('index', '?')
             name = ch_data.get('name', 'Unknown')
             encrypted = ch_data.get('encrypted', False)
-            status = "(Encrypted)" if encrypted else "(Open)"
+            status = "(Encryption not reported)" if encrypted is None else ("(Encrypted)" if encrypted else "(Open)")
             display_text = f"[{index}] {name} {status}"
             self.channel_list_widget.addItem(display_text)
 
@@ -371,7 +373,7 @@ class SettingsWindow(QDialog):
                  self.mesh_connection_details.setPlaceholderText("e.g., COM3 or /dev/ttyUSB0")
         else:
             if not self.mesh_connection_details.text():
-                 self.mesh_connection_details.setPlaceholderText("e.g., 192.168.1.X or device.local")
+                 self.mesh_connection_details.setPlaceholderText("Meshtastic: host; MeshCore: host:port")
 
     def find_serial_ports(self):
         if 'serial' not in globals() or serial is None:
@@ -446,7 +448,9 @@ class SettingsWindow(QDialog):
 
 
     def load_initial_settings(self):
+        self.mqtt_tls_checkbox.setChecked(self.current_settings.get("mqtt_tls", False))
         self.screen_name_input.setText(self.current_settings.get("screen_name", ""))
+        self.mesh_protocol.setCurrentText(self.current_settings.get("mesh_protocol", "Meshtastic"))
         self.mesh_connection_type.setCurrentText(self.current_settings.get("mesh_conn_type", "None"))
         self.mesh_connection_details.setText(self.current_settings.get("mesh_details", ""))
         self.enable_message_notifications_checkbox.setChecked(
@@ -507,6 +511,8 @@ class SettingsWindow(QDialog):
 
         settings = {
             "screen_name": self.screen_name_input.text().strip(),
+            "mesh_protocol": self.mesh_protocol.currentText(),
+            "mqtt_tls": self.mqtt_tls_checkbox.isChecked(),
             "mesh_conn_type": mesh_type,
             "mesh_details": self.mesh_connection_details.text().strip() if mesh_type != "None" else "",
             "meshtastic_channel_index": channel_index,
@@ -546,6 +552,15 @@ class SettingsWindow(QDialog):
         return settings
 
     def accept(self):
+        channel = self.mesh_channel_index_input.text().strip()
+        maximum = 7 if self.mesh_protocol.currentText() == "Meshtastic" else 255
+        if not channel.isdigit() or not 0 <= int(channel) <= maximum:
+            QMessageBox.warning(self, "Input Error", f"Channel index must be between 0 and {maximum}.")
+            return
+        port = self.port_input.text().strip()
+        if self.server_input.text().strip() and (not port.isdigit() or not 1 <= int(port) <= 65535):
+            QMessageBox.warning(self, "Input Error", "MQTT port must be between 1 and 65535.")
+            return
         new_settings = self.get_settings()
 
         if not new_settings["screen_name"]:
@@ -553,8 +568,14 @@ class SettingsWindow(QDialog):
             return
 
         if new_settings["mesh_conn_type"] != "None" and not new_settings["mesh_details"]:
-            QMessageBox.warning(self, "Input Error", "Meshtastic connection details required when connection type is not 'None'.")
+            QMessageBox.warning(self, "Input Error", "Radio connection details required when connection type is not 'None'.")
             return
+
+        if new_settings["mesh_protocol"] == "MeshCore" and new_settings["mesh_conn_type"] == "Network (IP)":
+            host, separator, port = new_settings["mesh_details"].rpartition(":")
+            if not separator or not host or not port.isdigit() or not 1 <= int(port) <= 65535:
+                QMessageBox.warning(self, "Input Error", "MeshCore TCP requires host:port (for example 192.168.1.20:5000).")
+                return
 
         if new_settings["meshtastic_channel_index"] < 0:
             QMessageBox.warning(self, "Input Error", "Meshtastic Channel Index cannot be negative.")

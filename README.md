@@ -1,16 +1,61 @@
-# MIM - Meshtastic Instant Messenger
+# MIM — Mesh Instant Messenger
 
-An AIM-style chat client using PySide6 that connects via MQTT and/or Meshtastic for decentralized or server-based messaging. Includes optional sound effects and chat logging.
-![Screenshot_2025-05-04_14-03-31](https://github.com/user-attachments/assets/c9201331-ee25-4c79-8e14-008c186bd584)
-## Features
+A classic desktop messenger for Meshtastic, MeshCore, and MQTT, built with Python and Qt. The interface follows the compact Windows 4.x/5.x messenger era with MIM's own identity.
 
-* Classic AIM-inspired interface (Buddy List, IM windows).
-* Connects to Meshtastic devices (via Serial or Network) for direct/broadcast messages.
-* Connects to an MQTT broker for server-based chat.
-* Configurable settings via UI (node connection, MQTT server, general options).
-* Optional sound effects for events (sign on/off, message send/receive, buddy status).
-* Optional local chat logging.
+## Quick start
 
+Install Python 3.11+ and [uv](https://docs.astral.sh/uv/), then:
+
+```sh
+uv sync --locked
+uv run python main.py
+```
+
+Open **Setup**, enter your screen name, and choose **Meshtastic** or **MeshCore**.
+Choose **Serial** and a port (such as COM3 or /dev/ttyUSB0), or **Network (IP)**.
+Meshtastic accepts a hostname; MeshCore TCP requires `host:port` for your companion.
+Use a radio running the corresponding firmware. One radio backend can be active
+at a time; an optional MQTT broker can run alongside it.
+
+Set the desired channel index before signing on. The Chat button opens that radio
+channel; other incoming channels open separate conversations. Meshtastic and
+MeshCore are separate networks; MIM does not bridge them or translate RF packets.
+MeshCore BLE support is not exposed in this UI.
+
+For MQTT, configure the broker, port, username, and optional **Use TLS** setting.
+Enter its password on the sign-on screen. Passwords are never saved by new config
+writes; existing config backups are not modified. Choose the broker's TLS port
+(usually 8883) when enabling TLS. MQTT usernames and screen names are separate.
+
+Official Meshtastic MQTT map reports are decoded using the SDK protobufs.
+The default map subscription is `msh/US/2/map/#`. Advanced configuration keys
+`mqtt_map_proto_topic`, `mqtt_map_json_topic`, and `mqtt_envelope_topic` can select
+other roots or optional plaintext position/node-info ServiceEnvelope feeds.
+Encrypted envelopes are ignored; no keys are guessed or forwarded between networks.
+
+## Development and verification
+
+```sh
+uv run pytest -q
+uv run ruff check .
+uv run python preview.py preview.png
+uv run pyinstaller --clean MIM.spec
+```
+
+`uv.lock` pins development and runtime dependencies. `requirements.txt` is an
+export for pip users. Regenerate it after a dependency update with:
+
+```sh
+uv export --no-dev --format requirements-txt --output-file requirements.txt
+```
+
+The Windows build limits DLL discovery to its Python runtime and Windows system
+directories. This prevents unrelated tools on PATH from contributing incompatible
+ICU/OpenSSL libraries. Use `--clean` when rebuilding a previously packaged copy.
+`MIM.exe --smoke-test` checks startup and cleanup without using saved connections.
+
+Tests use mocked radios; radio acceptance is not a delivery receipt. The map's Leaflet assets still need internet access even
+when local tiles are selected.
 
 ## License
 
@@ -25,7 +70,7 @@ These instructions will guide you through setting up the project on Windows or L
 
 **Prerequisites:**
 
-* **Python:** Ensure you have Python 3 (version 3.8 or newer recommended) installed. You can download it from [python.org](https://www.python.org/). Verify by opening a terminal or command prompt and typing `python --version`.
+* **Python:** Ensure you have Python 3 (version 3.11 or newer required) installed. You can download it from [python.org](https://www.python.org/). Verify by opening a terminal or command prompt and typing `python --version`.
 * **Git:** Ensure you have Git installed. You can download it from [git-scm.com](https://git-scm.com/).
 
 **Steps:**
@@ -138,4 +183,3 @@ The correct way to resolve this is to add your user account to the group that ha
 
 * **Avoid `sudo` for Running the Application:** Do not run the main application with `sudo` as a regular workaround for permission issues. Fixing the group membership as described above is the correct, more secure, and stable method.
 * **`udev` Rules (Advanced Users):** For users who require more permanent or customized device permissions, or for situations where device names might change (e.g., `/dev/ttyUSB0` sometimes becomes `/dev/ttyUSB1`), creating `udev` rules is a more robust, albeit more advanced, solution. This involves creating a rule file in `/etc/udev/rules.d/` to set specific permissions or create a persistent symbolic link for your device. However, for most users, adding your user to the appropriate group is sufficient and simpler.
-

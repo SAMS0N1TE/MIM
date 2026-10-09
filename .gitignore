@@ -172,3 +172,22 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Local configuration and credentials
+.env.*
+!.env.example
+mim_meshtastic_config.json*
+certs/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Local working files and exports
+work/
+outputs/
+notes/
+handoffs/
+REVIEW.txt
+preview.png
+*.zip

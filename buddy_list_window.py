@@ -35,12 +35,7 @@ LAST_HEARD_ROLE = Qt.UserRole + 5
 ASSIGNED_GROUP_ROLE = Qt.UserRole + 6
 
 
-def get_resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from resources import get_resource_path
 
 
 def compute_node_status(node_data):
@@ -82,6 +77,10 @@ def format_timestamp(ts):
         return "Invalid Date"
 
 
+def radio_network(identifier):
+    return "meshtastic" if identifier == PUBLIC_CHAT_ID or identifier.startswith(("!", "mc:", "mc-channel:", "mt-channel:")) else "mqtt"
+
+
 class BuddyListWindow(QMainWindow):
     groupAssignmentsChanged = Signal(dict)
     sign_off_requested = Signal()
@@ -95,6 +94,7 @@ class BuddyListWindow(QMainWindow):
         super().__init__()
         self.screen_name = screen_name
         self.connection_settings = connection_settings
+        self.radio_channel_title = f"Channel {connection_settings.get('meshtastic_channel_index', 0)}"
         self.app_config = app_config if app_config else {}
         self.chat_windows = {}
         self.displayed_mesh_nodes = set()
@@ -110,18 +110,19 @@ class BuddyListWindow(QMainWindow):
 
 
         icon_path_base = get_resource_path("resources/icons/")
-        self.online_icon = QIcon(os.path.join(icon_path_base, "buddy_online.png"))
-        self.offline_icon = QIcon(os.path.join(icon_path_base, "buddy_offline.png"))
-        self.away_icon = QIcon(os.path.join(icon_path_base, "buddy_away.png"))
-        self.public_chat_icon = QIcon(os.path.join(icon_path_base, "group_chat.png"))
-        self.mqtt_group_icon = QIcon(os.path.join(icon_path_base, "mqtt_group.png"))
+        self.online_icon = QIcon(os.path.join(icon_path_base, "status-online.svg"))
+        self.offline_icon = QIcon(os.path.join(icon_path_base, "status-offline.svg"))
+        self.away_icon = QIcon(os.path.join(icon_path_base, "status-away.svg"))
+        self.public_chat_icon = QIcon(os.path.join(icon_path_base, "mim-mark.svg"))
+        self.mqtt_group_icon = QIcon(os.path.join(icon_path_base, "mim-mark.svg"))
         if self.mqtt_group_icon.isNull():
-             self.mqtt_group_icon = QIcon(os.path.join(icon_path_base, "group_chat.png"))
-        self.app_icon = QIcon(os.path.join(icon_path_base, "mim_logo.png"))
+             self.mqtt_group_icon = QIcon(os.path.join(icon_path_base, "mim-mark.svg"))
+        self.app_icon = QIcon(os.path.join(icon_path_base, "mim-mark.svg"))
 
         self.setWindowIcon(self.app_icon)
         self.setWindowTitle(f"{self.screen_name} - Buddy List")
-        self.setMinimumSize(200, 450)
+        self.setMinimumSize(230, 380)
+        self.resize(276, 470)
 
         self._create_tray_icon()
 
@@ -131,31 +132,17 @@ class BuddyListWindow(QMainWindow):
         main_layout.setContentsMargins(5, 5, 5, 5)
         main_layout.setSpacing(5)
 
-        LOGO_AREA_BG_COLOR = "#033b72"
-        LOGO_SIZE = QSize(90, 90)
-        LOGO_AREA_MARGINS = (10, 10, 10, 10)
-
-        logo_frame = QFrame()
-        logo_frame.setStyleSheet(f"background-color: {LOGO_AREA_BG_COLOR}; border: none;")
-        logo_layout = QVBoxLayout(logo_frame)
-        logo_layout.setAlignment(Qt.AlignCenter)
-        logo_layout.setContentsMargins(*LOGO_AREA_MARGINS)
-
         logo_label = QLabel()
-        pixmap = self.app_icon.pixmap(LOGO_SIZE)
-        if not pixmap.isNull():
-            scaled_pixmap = pixmap.scaled(LOGO_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo_label.setPixmap(scaled_pixmap)
-        else:
-            logo_label.setText("Logo")
-
-        logo_layout.addWidget(logo_label)
-        main_layout.addWidget(logo_frame, 0)
+        logo_label.setPixmap(QPixmap(get_resource_path("resources/icons/mim-banner.svg")))
+        logo_label.setAlignment(Qt.AlignCenter)
+        logo_label.setFixedHeight(62)
+        main_layout.addWidget(logo_label)
 
         status_layout = QHBoxLayout()
         status_label = QLabel("Status:")
         self.status_combo = QComboBox()
-        self.status_combo.addItems(["Online", "Away", "Invisible", "Offline"])
+        self.status_combo.addItems(["Online", "Away", "Offline"])
+        self.status_combo.setToolTip("Local status only; radio presence is based on last heard time.")
         self.status_combo.setCurrentText("Online")
         self.status_combo.currentIndexChanged.connect(self.update_my_status)
         status_layout.addWidget(status_label)
@@ -173,6 +160,8 @@ class BuddyListWindow(QMainWindow):
 
         self.buddy_tree = QTreeView()
         self.buddy_tree.setHeaderHidden(True)
+        self.buddy_tree.setIndentation(16)
+        self.buddy_tree.setUniformRowHeights(True)
         self.buddy_tree.setEditTriggers(QTreeView.NoEditTriggers)
         self.buddy_tree.setAlternatingRowColors(False)
         self.model = QStandardItemModel()
@@ -207,9 +196,11 @@ class BuddyListWindow(QMainWindow):
         button_layout = QHBoxLayout()
         self.im_button = QPushButton("IM")
         self.chat_button = QPushButton("Chat")
+        self.chat_button.clicked.connect(lambda: self.open_chat_window(PUBLIC_CHAT_ID, self.radio_channel_title, "meshtastic"))
         self.setup_button = QPushButton("Setup")
         button_layout.addStretch(1)
         button_layout.addWidget(self.im_button)
+        button_layout.addWidget(self.chat_button)
         button_layout.addWidget(self.setup_button)
         button_layout.addStretch(1)
         main_layout.addLayout(button_layout)
@@ -223,6 +214,8 @@ class BuddyListWindow(QMainWindow):
         self.setup_button.clicked.connect(self._request_settings)
 
         QTimer.singleShot(150, lambda: self.statusBar().showMessage("Ready"))
+        from classic_chrome import install_chrome
+        install_chrome(self)
 
     def _get_log_file_path_for_chat_id(self, chat_id):
         if not self.app_config.get("auto_save_chats", False) or not chat_id:
@@ -263,31 +256,6 @@ class BuddyListWindow(QMainWindow):
                 return subscribed_pattern
         return None
 
-    def _indicate_new_mqtt_group_message(self, specific_message_topic, sender_name, message_text):
-        matched_group_pattern = self._get_matched_subscribed_group_topic(specific_message_topic)
-
-        ui_update_topic = matched_group_pattern if matched_group_pattern else specific_message_topic
-
-        item = self.find_group_topic_item(ui_update_topic)
-
-        if item:
-            current_count = self.mqtt_group_unread_counts.get(ui_update_topic, 0)
-            new_count = current_count + 1
-            self.mqtt_group_unread_counts[ui_update_topic] = new_count
-
-            original_text = ui_update_topic
-            item.setText(f"{original_text} ({new_count})")
-            item.setFont(self.bold_font)
-
-        log_file_path = self._get_log_file_path_for_chat_id(ui_update_topic)
-        if log_file_path:
-            timestamp = datetime.datetime.now(datetime.timezone.utc)
-            log_entry_text = f"[{specific_message_topic}] {message_text}"
-            self._save_message_to_log(log_file_path, timestamp, sender_name if sender_name else "Unknown",
-                                      log_entry_text)
-        else:
-            print(
-                f"Message for group '{ui_update_topic}' (from specific topic '{specific_message_topic}') not saved to log (auto-save off or path error).")
 
     def _create_tray_icon(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -346,7 +314,7 @@ class BuddyListWindow(QMainWindow):
         im_action = QAction("&Send Instant Message...", self)
         im_action.triggered.connect(self.send_im_button_clicked)
         add_buddy_action = QAction("&Add Buddy...", self)
-        add_buddy_action.triggered.connect(self.add_buddy_placeholder)
+        add_buddy_action.triggered.connect(self.add_buddy)
         people_menu.addAction(im_action)
         people_menu.addSeparator()
         people_menu.addAction(add_buddy_action)
@@ -357,7 +325,7 @@ class BuddyListWindow(QMainWindow):
         view_menu.addAction(map_action)
 
         help_menu = menu_bar.addMenu("&Help")
-        about_action = QAction("&About Meshtastic Instant Messenger...", self)
+        about_action = QAction("&About MIM...", self)
         about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(about_action)
 
@@ -371,7 +339,7 @@ class BuddyListWindow(QMainWindow):
         root_node.removeRows(0, root_node.rowCount())
         self.groups = {}
 
-        public_chat_group = QStandardItem("Public Chat")
+        public_chat_group = QStandardItem(self.radio_channel_title)
         public_chat_group.setIcon(self.public_chat_icon)
         public_chat_font = QFont(); public_chat_font.setBold(True)
         public_chat_group.setFont(public_chat_font)
@@ -586,89 +554,6 @@ class BuddyListWindow(QMainWindow):
                  del self._buddy_group_assignments[buddy_id]
                  self.groupAssignmentsChanged.emit(self._buddy_group_assignments)
 
-    @Slot(list)
-    def handle_node_list_update(self, nodes_list):
-        now = time.time()
-        current_mesh_node_ids = set()
-
-        print("[Buddy List] Processing node list update with", len(nodes_list), "nodes")
-
-        my_node_id = None
-        if hasattr(self, 'meshtastic_handler') and self.meshtastic_handler:
-            if hasattr(self.meshtastic_handler, '_my_node_num') and self.meshtastic_handler._my_node_num:
-                my_node_id = f"!{self.meshtastic_handler._my_node_num:x}"
-                print(f"[Buddy List] Our node ID is: {my_node_id}")
-
-        for node_data in nodes_list:
-            user_info = node_data.get('user', {})
-            node_id = user_info.get('id')
-
-            if not node_id or node_id == self.connection_settings.get("screen_name") or node_id == PUBLIC_CHAT_ID:
-                continue
-
-            current_mesh_node_ids.add(node_id)
-            display_name = user_info.get('longName') or user_info.get('shortName') or node_id
-
-            is_active = node_data.get('active_report', False)
-            if is_active:
-                print(f"[Buddy List] Node {node_id} is ACTIVE, forcing Online status")
-                status = "Online"
-                icon = self.online_icon
-            else:
-                status = compute_node_status(node_data)
-                if status == "Online":
-                    icon = self.online_icon
-                elif status == "Away":
-                    icon = self.away_icon
-                else:
-                    icon = self.offline_icon
-
-            self.add_or_update_buddy(None, node_id, display_name, status, node_data, force_icon=icon)
-
-        nodes_to_remove = self.displayed_mesh_nodes - current_mesh_node_ids
-        for node_id_to_remove in nodes_to_remove:
-            item = self.find_buddy_item(node_id_to_remove)
-            if item:
-                display_name = item.text()
-                self.add_or_update_buddy(None, node_id_to_remove, display_name, "Offline", None,
-                                         force_icon=self.offline_icon)
-            else:
-                pass
-
-        self.displayed_mesh_nodes = current_mesh_node_ids
-
-        self._apply_saved_group_assignments()
-
-        if my_node_id and hasattr(self, 'meshtastic_handler') and self.meshtastic_handler:
-            if my_node_id in self.meshtastic_handler._nodes:
-                node = self.meshtastic_handler._nodes[my_node_id]
-
-                current_ui_status = self.status_combo.currentText()
-
-                NODE_ACTIVE_TIMEOUT_SEC = 60 * 5
-
-                is_active = node.get('active_report', False)
-
-                if is_active:
-                    my_actual_status = "Online"
-                else:
-                    last_heard = node.get('lastHeard', 0)
-                    time_diff = now - last_heard
-
-                    if time_diff > NODE_ACTIVE_TIMEOUT_SEC:
-                        my_actual_status = "Offline"
-                    else:
-                        my_actual_status = "Away"
-
-                if my_actual_status != current_ui_status and current_ui_status != "Offline":
-                    print(f"[Buddy List] Updating our status in UI from '{current_ui_status}' to '{my_actual_status}'")
-                    self.status_combo.blockSignals(True)
-                    self.status_combo.setCurrentText(my_actual_status)
-                    self.status_combo.blockSignals(False)
-
-                    if my_actual_status == "Online":
-                        node['active_report'] = True
-                        node['lastHeard'] = now
 
 
     def _apply_saved_group_assignments(self):
@@ -717,9 +602,9 @@ class BuddyListWindow(QMainWindow):
         display_name = item.text()
 
         if item_type == "group_public":
-            self.open_chat_window(PUBLIC_CHAT_ID, "Public Chat", 'meshtastic')
+            self.open_chat_window(PUBLIC_CHAT_ID, self.radio_channel_title, 'meshtastic')
         elif item_type == "buddy" and item_id:
-            self.open_chat_window(item_id, display_name, 'meshtastic')
+            self.open_chat_window(item_id, display_name, radio_network(item_id))
         elif item_type == "mqtt_group" and item_id:
              self.open_chat_window(item_id, display_name, 'mqtt')
 
@@ -749,7 +634,7 @@ class BuddyListWindow(QMainWindow):
             display_name = item.text()
 
             if item_type == "group_public":
-                 return PUBLIC_CHAT_ID, "Public Chat", "group_public"
+                 return PUBLIC_CHAT_ID, self.radio_channel_title, "group_public"
             elif item_type == "buddy" and item_id:
                  return item_id, display_name, "buddy"
             elif item_type == "mqtt_group" and item_id:
@@ -762,9 +647,9 @@ class BuddyListWindow(QMainWindow):
         item_id, display_name, item_type = self.get_selected_item_info()
 
         if item_type == "buddy":
-            self.open_chat_window(item_id, display_name, 'meshtastic')
+            self.open_chat_window(item_id, display_name, radio_network(item_id))
         elif item_type == "group_public":
-            self.open_chat_window(PUBLIC_CHAT_ID, "Public Chat", 'meshtastic')
+            self.open_chat_window(PUBLIC_CHAT_ID, self.radio_channel_title, 'meshtastic')
         elif item_type == "mqtt_group":
              self.open_chat_window(item_id, display_name, 'mqtt')
         else:
@@ -828,7 +713,7 @@ class BuddyListWindow(QMainWindow):
             if network_type == 'mqtt' and chat_id in self.app_config.get("mqtt_group_topics", []):
                 title = f"Group: {display_name}"
             elif chat_id == PUBLIC_CHAT_ID:
-                title = "Public Chat"
+                title = self.radio_channel_title
             elif network_type == 'mqtt':
                 title = f"IM with {display_name} (MQTT)"
             else:
@@ -908,7 +793,7 @@ class BuddyListWindow(QMainWindow):
 
         chat_window_title = chat_id
         if is_public_chat_msg:
-            chat_window_title = "Public Chat"
+            chat_window_title = self.radio_channel_title
         elif sender_display_name_arg:
             chat_window_title = sender_display_name_arg
 
@@ -1083,8 +968,8 @@ class BuddyListWindow(QMainWindow):
         QMessageBox.information(self, "Not Implemented", "List Setup not implemented.")
 
 
-    def add_buddy_placeholder(self):
-        text, ok = QInputDialog.getText(self, 'Add Buddy', 'Enter buddy ID (!hexid or mqtt_topic):')
+    def add_buddy(self):
+        text, ok = QInputDialog.getText(self, 'Add Buddy', 'Enter buddy ID (!hexid, mc:public_key, or MQTT topic):')
         if ok and text:
             text = text.strip()
             if not text: return
@@ -1108,10 +993,10 @@ class BuddyListWindow(QMainWindow):
 
 
     def show_about_dialog(self):
-        QMessageBox.about(self, "About Meshtastic Instant Messenger",
-                          "MIM - Meshtastic Instant Messenger\n\n"
-                          "A simple AIM-like client using Meshtastic and/or MQTT.\n"
-                          "(Based on initial concepts and code structure)")
+        QMessageBox.about(self, "About MIM",
+                          "MIM - Mesh Instant Messenger\n\n"
+                          "Classic desktop messaging over Meshtastic, MeshCore and MQTT.\n"
+                          "Radio acceptance does not confirm delivery.")
 
 
     def request_sign_off(self):
@@ -1153,7 +1038,7 @@ class BuddyListWindow(QMainWindow):
                  menu = QMenu(self)
                  im_action = QAction("Open Public Chat", self)
                  im_action.triggered.connect(
-                     lambda checked=False, id=PUBLIC_CHAT_ID, name="Public Chat", nt='meshtastic': self.open_chat_window(id, name, nt))
+                     lambda checked=False, id=PUBLIC_CHAT_ID, name=self.radio_channel_title, nt='meshtastic': self.open_chat_window(id, name, nt))
                  menu.addAction(im_action)
                  global_point = self.buddy_tree.viewport().mapToGlobal(point)
                  menu.exec_(global_point)
@@ -1163,7 +1048,7 @@ class BuddyListWindow(QMainWindow):
             menu = QMenu(self)
 
             im_action = QAction("Send Message", self)
-            network_type = 'meshtastic' if item_id.startswith('!') else 'mqtt' # Simple heuristic for context menu
+            network_type = radio_network(item_id)
             im_action.triggered.connect(
                 lambda checked=False, id=item_id, name=item.text(), nt=network_type: self.open_chat_window(id, name, nt))
             menu.addAction(im_action)

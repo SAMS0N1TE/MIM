@@ -1,0 +1,27 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --python 3.12
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - if: runner.os == 'Windows'
+        run: uv run pyinstaller --clean --noconfirm MIM.spec
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath (Resolve-Path 'dist/MIM/MIM.exe') -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru
+          if (-not $process.WaitForExit(30000)) { Stop-Process -Id $process.Id; throw 'Packaged startup timed out' }
+          if ($process.ExitCode -ne 0) { throw "Packaged startup failed: $($process.ExitCode)" }

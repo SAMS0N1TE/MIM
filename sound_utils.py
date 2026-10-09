@@ -25,12 +25,7 @@ except pygame.error as pg_err:
 last_buddy_sound_time = 0
 BUDDY_SOUND_THROTTLE_SECONDS = 1.5
 
-def get_resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from resources import get_resource_path
 
 def set_sounds_enabled(enabled: bool):
     global SOUNDS_ENABLED

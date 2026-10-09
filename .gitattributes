@@ -1,0 +1,8 @@
+* text=auto
+*.py text eol=lf
+*.qss text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.spec text eol=lf
+*.svg text eol=lf

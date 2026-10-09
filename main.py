@@ -16,6 +16,9 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from buddy_list_window import BuddyListWindow, PUBLIC_CHAT_ID
 from login_window import LoginWindow
 from meshtastic_handler import MeshtasticHandler
+from meshcore_handler import MeshCoreHandler
+from protobuf_codec import decode_map_report, decode_service_envelope
+from theme import apply_theme
 from settings_window import SettingsWindow
 from sound_utils import play_sound_async, set_sounds_enabled
 
@@ -31,12 +34,7 @@ UPDATES_CLIENT_AUTH_NAME = "mim-client"
 MQTT_MAP_JSON_TOPIC = "msh/US/2/json/#"
 MQTT_MAP_PROTO_TOPIC = "msh/US/2/map/#"
 
-def get_resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from resources import get_resource_path
 
 def get_config_path():
     app_data_dir = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -53,8 +51,10 @@ def get_config_path():
 def save_config(config_data):
     path = get_config_path()
     try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, indent=4)
+        temporary = path + ".tmp"
+        with open(temporary, 'w', encoding='utf-8') as f:
+            json.dump({key: value for key, value in config_data.items() if key != "password"}, f, indent=4)
+        os.replace(temporary, path)
         return True
     except IOError:
         return False
@@ -64,6 +64,7 @@ def save_config(config_data):
 def load_config():
     path = get_config_path()
     default_config = {
+        "mesh_protocol": "Meshtastic", "mqtt_tls": False,
         "screen_name": "", "mesh_conn_type": "None", "mesh_details": "",
         "meshtastic_channel_index": 0,
         "mqtt_group_topics": [],
@@ -71,7 +72,7 @@ def load_config():
         "custom_buddy_groups": [],
         "server": "", "port": 1883,
         "username": "", "password": "", "auto_save_chats": False,
-        "sounds_enabled": True, "enable_update_notifications": True,
+        "sounds_enabled": True, "enable_update_notifications": False,
         "message_notifications_enabled": True,
         "auto_login": False
     }
@@ -126,6 +127,7 @@ class ApplicationController(QObject):
         self._node_list_initial_request_pending = False
         self._last_channel_list = []
         self._last_nodes_list = []
+        self._auto_login_attempted = False
         self._subscribed_mqtt_groups = set()
 
         initial_sound_state = self.current_config.get("sounds_enabled", True)
@@ -185,6 +187,9 @@ class ApplicationController(QObject):
             self.login_window.sign_on_requested.connect(self.handle_sign_on_request)
             self.login_window.destroyed.connect(self._login_window_destroyed)
             self.login_window.show()
+            if saved_auto_login and saved_screen_name and not self.current_config.get("username") and not self._auto_login_attempted:
+                self._auto_login_attempted = True
+                QTimer.singleShot(100, new_login_window.on_sign_on_clicked)
             self.app.setQuitOnLastWindowClosed(True)
         else:
             self.app.setQuitOnLastWindowClosed(True)
@@ -280,7 +285,7 @@ class ApplicationController(QObject):
         else:
             pass
 
-    def _on_update_mqtt_disconnect(self, _client, _userdata, rc, reasonCode=None, properties=None):
+    def _on_update_mqtt_disconnect(self, _client, _userdata, _flags, rc, properties=None):
         pass
 
 
@@ -315,6 +320,12 @@ class ApplicationController(QObject):
 
                 play_sound_async("send.wav")
 
+        elif msg_type == 'channel':
+            if self.buddy_list_window:
+                channel_name = f"Channel {sender_id.split(':')[-1]}"
+                self.buddy_list_window.open_chat_window(sender_id, channel_name, 'meshtastic')
+                self.buddy_list_window.chat_windows[sender_id].receive_message(text, display_name)
+
         elif msg_type == 'broadcast':
             print(f"[Main] Adding message to public chat: {sender_id} ({display_name})")
             if not self.buddy_list_window.is_public_chat_open():
@@ -330,7 +341,7 @@ class ApplicationController(QObject):
             my_topic = self.connection_settings.get("screen_name")
             topics_to_subscribe = []
             if my_topic:
-                pass
+                topics_to_subscribe.append((my_topic, 1))
 
             group_topics = self.connection_settings.get("mqtt_group_topics", [])
             print(f"[MQTT Connect] Subscribing to MQTT Group Topics: {group_topics}")
@@ -342,6 +353,9 @@ class ApplicationController(QObject):
             map_topics_to_subscribe = []
             map_json_topic_pattern = self.current_config.get("mqtt_map_json_topic", MQTT_MAP_JSON_TOPIC)
             map_proto_topic_pattern = self.current_config.get("mqtt_map_proto_topic", MQTT_MAP_PROTO_TOPIC)
+            envelope_topic = self.current_config.get("mqtt_envelope_topic", "")
+            if envelope_topic:
+                client.subscribe(envelope_topic, qos=0)
 
             if map_json_topic_pattern:
                 print(f"[MQTT Connect] Subscribing to MQTT Map JSON Topic: {map_json_topic_pattern}")
@@ -384,7 +398,7 @@ class ApplicationController(QObject):
             self.mqtt_connection_updated.emit(False, f"Connection failed: {error_string}")
 
 
-    def _on_mqtt_disconnect(self, _client, _userdata, rc, reasonCode=None, properties=None):
+    def _on_mqtt_disconnect(self, _client, _userdata, _flags, rc, properties=None):
         disconnect_rc = rc.value if isinstance(rc, mqtt.ReasonCode) else rc
         if disconnect_rc == 0:
             if not self._signing_off and not self._quitting:
@@ -575,10 +589,7 @@ class ApplicationController(QObject):
              return
 
         self.current_config = load_config()
-        config_screen_name = self.current_config.get("screen_name")
-        if config_screen_name != screen_name:
-            QMessageBox.warning(self.login_window,"Sign On Error",f"The Screen Name '{screen_name}' does not match the configured name ('{config_screen_name}').\nPlease use 'Setup' to configure this name first, or enter the correct configured name.")
-            return
+        self.current_config["screen_name"] = screen_name
 
         config_to_use = self.current_config
 
@@ -597,6 +608,7 @@ class ApplicationController(QObject):
 
         should_save_prefs = False
         if self.login_window and self.login_window.get_save_config_preference():
+             should_save_prefs = True
              if self.current_config.get("auto_login") != auto_login:
                  self.current_config["auto_login"] = auto_login
                  should_save_prefs = True
@@ -654,7 +666,7 @@ class ApplicationController(QObject):
             return
 
         if self.buddy_list_window:
-            status_prefix = "Meshtastic: " if self.connection_settings.get("mesh_conn_type", "None") != "None" else ""
+            status_prefix = self.connection_settings.get("mesh_protocol", "Meshtastic") + ": " if self.connection_settings.get("mesh_conn_type", "None") != "None" else ""
             status_message = f"{status_prefix}{message}" if connected else f"{status_prefix}Error: {message}"
             self.buddy_list_window.statusBar().showMessage(status_message, 5000)
 
@@ -674,8 +686,8 @@ class ApplicationController(QObject):
 
                 if show_critical_error:
                     QMessageBox.warning(self.buddy_list_window or self.login_window or None,
-                                        "Meshtastic Connection Failed",
-                                        f"Meshtastic connection failed or lost:\n{message}\n\nNo other connections active. Signing off.")
+                                        "Radio Connection Failed",
+                                        f"Radio connection failed or lost:\n{message}\n\nNo other connections active. Signing off.")
                     self._connection_error_shown = True
                     QTimer.singleShot(0, self.handle_sign_off)
             self._disconnect_mesh_handler()
@@ -719,6 +731,8 @@ class ApplicationController(QObject):
                 if mqtt_user:
                     self.mqtt_client.username_pw_set(mqtt_user, mqtt_pass)
 
+                if settings.get("mqtt_tls", False):
+                    self.mqtt_client.tls_set()
                 self.mqtt_client.connect_async(mqtt_server, mqtt_port, 60)
                 self.mqtt_client.loop_start()
 
@@ -747,25 +761,20 @@ class ApplicationController(QObject):
                 if not self._connection_error_shown:
                     parent = self.buddy_list_window or None
                     QMessageBox.critical(parent, "Connection Error",
-                                         "No Meshtastic or MQTT connection configured.\nPlease use Setup.")
+                                         "No radio or MQTT connection configured.\nPlease use Setup.")
                     self._connection_error_shown = True
                 self.handle_sign_off()
                 return
 
     def _is_map_topic(self, topic_str):
-        map_json_base = self.current_config.get("mqtt_map_json_topic", MQTT_MAP_JSON_TOPIC)
-        map_proto_base = self.current_config.get("mqtt_map_proto_topic", MQTT_MAP_PROTO_TOPIC)
-
-        if map_json_base.endswith("/#"): map_json_base = map_json_base[:-2]
-        elif map_json_base.endswith("/+"): map_json_base = map_json_base[:-2]
-
-        if map_proto_base.endswith("/#"): map_proto_base = map_proto_base[:-2]
-        elif map_proto_base.endswith("/+"): map_proto_base = map_proto_base[:-2]
-
-        if map_json_base and topic_str.startswith(map_json_base):
-            return "json"
-        if map_proto_base and topic_str.startswith(map_proto_base):
-            return "proto"
+        patterns = (
+            (self.current_config.get("mqtt_map_json_topic", MQTT_MAP_JSON_TOPIC), "json"),
+            (self.current_config.get("mqtt_map_proto_topic", MQTT_MAP_PROTO_TOPIC), "proto"),
+            (self.current_config.get("mqtt_envelope_topic", ""), "envelope"),
+        )
+        for pattern, kind in patterns:
+            if pattern and mqtt.topic_matches_sub(pattern, topic_str):
+                return kind
         return None
 
     def _parse_mqtt_map_json_payload(self, topic, payload_str):
@@ -916,31 +925,17 @@ class ApplicationController(QObject):
         map_topic_type = self._is_map_topic(topic)
 
         if map_topic_type:
-            payload_str_map = None
             try:
-                payload_str_map = msg.payload.decode("utf-8")
-                node_update_data = None
-                if map_topic_type == "json":
-                    node_update_data = self._parse_mqtt_map_json_payload(topic, payload_str_map)
-                elif map_topic_type == "proto":
-                    print(f"[Map MQTT RX] Protobuf parsing for topic '{topic}' not yet fully implemented.")
-                    if msg.payload:
-                        pass
-
-                if node_update_data:
-                    self.mqtt_map_node_update_received.emit(node_update_data)
-
-            except UnicodeDecodeError:
                 if map_topic_type == "proto":
-                    print(
-                        f"[Map MQTT RX] Received binary payload (expected for proto) on topic {topic}. Length: {len(msg.payload)}")
-                    if msg.payload:
-                        pass
+                    node = decode_map_report(msg.payload, topic)
+                elif map_topic_type == "envelope":
+                    node = decode_service_envelope(msg.payload)
                 else:
-                    print(f"[Map MQTT RX Error] Failed to decode UTF-8 payload on JSON map topic {topic}.")
-            except Exception as e:
-                print(f"[Map MQTT RX Error] General error processing map message from topic {topic}: {e}")
-                traceback.print_exc()
+                    node = self._parse_mqtt_map_json_payload(topic, msg.payload.decode("utf-8"))
+                if node:
+                    self.mqtt_map_node_update_received.emit(node)
+            except (UnicodeDecodeError, ValueError) as exc:
+                print(f"[Map MQTT RX] Invalid payload: {exc}")
             return
 
         try:
@@ -1001,6 +996,9 @@ class ApplicationController(QObject):
                 elif not is_group_msg:
                     display_name_of_sender = topic
 
+            if not isinstance(sender, str) or not isinstance(display_name_of_sender, str):
+                return
+
             self.mqtt_message_received_signal.emit(topic, sender, text_content, msg_type_for_routing,
                                                    display_name_of_sender)
 
@@ -1017,7 +1015,9 @@ class ApplicationController(QObject):
             self._disconnect_mesh_handler()
 
         try:
-            self.meshtastic_handler = MeshtasticHandler(settings)
+            handler_class = MeshCoreHandler if settings.get("mesh_protocol") == "MeshCore" else MeshtasticHandler
+            self.meshtastic_handler = handler_class(settings)
+            self.meshtastic_handler.send_result.connect(self._handle_radio_send_result)
             self.meshtastic_handler.connection_status.connect(self.handle_meshtastic_connection_status)
             self.meshtastic_handler.message_received.connect(self.route_incoming_message_from_mesh)
             self.meshtastic_handler.node_list_updated.connect(self._handle_node_list_update)
@@ -1097,6 +1097,8 @@ class ApplicationController(QObject):
             try: handler.node_list_updated.disconnect(self._handle_node_list_update)
             except (TypeError, RuntimeError): pass
             try: handler.channel_list_updated.disconnect(self._handle_channel_list_update)
+            except (TypeError, RuntimeError): pass
+            try: handler.send_result.disconnect(self._handle_radio_send_result)
             except (TypeError, RuntimeError): pass
 
             try:
@@ -1218,13 +1220,19 @@ class ApplicationController(QObject):
                 print(f"[Main] ERROR: Cannot open chat window, buddy_list_window is None!")
 
 
+        elif msg_type == 'channel':
+            if self.buddy_list_window:
+                channel_name = f"Channel {sender_id.split(':')[-1]}"
+                self.buddy_list_window.open_chat_window(sender_id, channel_name, 'meshtastic')
+                self.buddy_list_window.chat_windows[sender_id].receive_message(text, display_name)
+
         elif msg_type == 'broadcast':
 
             if self.buddy_list_window:
 
                 public_chat_id = "^all"
 
-                self.buddy_list_window.open_chat_window(public_chat_id, "Public Chat", 'meshtastic')
+                self.buddy_list_window.open_chat_window(public_chat_id, f"Channel {self.connection_settings.get('meshtastic_channel_index', 0)}", 'meshtastic')
 
                 chat_window = self.buddy_list_window.chat_windows.get(public_chat_id)
 
@@ -1234,17 +1242,25 @@ class ApplicationController(QObject):
                 print(f"[Main] ERROR: Cannot handle broadcast message, buddy_list_window is None!")
 
 
+    @Slot(str, bool, str)
+    def _handle_radio_send_result(self, recipient_id, success, detail):
+        if self.buddy_list_window:
+            chat = self.buddy_list_window.chat_windows.get(recipient_id)
+            if chat:
+                chat.statusBar().showMessage(detail if success else f"Send failed: {detail}")
+
     @Slot(str, str, str)
     def handle_send_request(self, recipient_id, message_text, network_type):
         if network_type == 'meshtastic':
             if self.meshtastic_handler and self.meshtastic_handler.is_running:
-                channel_index = 0 if recipient_id == PUBLIC_CHAT_ID else self.connection_settings.get("meshtastic_channel_index", 0)
+                channel_index = self.connection_settings.get("meshtastic_channel_index", 0)
                 dest_id = PUBLIC_CHAT_ID if recipient_id == PUBLIC_CHAT_ID else recipient_id
 
                 self.meshtastic_handler.send_message(dest_id, message_text, channel_index)
             else:
+                self._handle_radio_send_result(recipient_id, False, "Radio is disconnected")
                 if self.buddy_list_window:
-                    self.buddy_list_window.statusBar().showMessage("Error: Meshtastic not connected.", 3000)
+                    self.buddy_list_window.statusBar().showMessage("Error: Radio not connected.", 3000)
 
         elif network_type == 'mqtt':
             if self.mqtt_client and self.mqtt_client.is_connected():
@@ -1257,13 +1273,18 @@ class ApplicationController(QObject):
                         topic=target_topic, payload=payload, qos=1, retain=False
                     )
                     if result != mqtt.MQTT_ERR_SUCCESS:
+                        self._handle_radio_send_result(recipient_id, False, f"MQTT error {result}")
                         if self.buddy_list_window:
                             self.buddy_list_window.statusBar().showMessage(f"Error sending IM (Code: {result})", 3000)
+                    else:
+                        self._handle_radio_send_result(recipient_id, True, "Queued for MQTT broker; delivery unconfirmed")
                 except Exception:
                     traceback.print_exc()
+                    self._handle_radio_send_result(recipient_id, False, "MQTT publish failed")
                     if self.buddy_list_window:
                         self.buddy_list_window.statusBar().showMessage("Error sending IM.", 3000)
             else:
+                self._handle_radio_send_result(recipient_id, False, "MQTT is disconnected")
                 if self.buddy_list_window:
                     self.buddy_list_window.statusBar().showMessage("Error: MQTT not connected.", 3000)
         else:
@@ -1340,43 +1361,14 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setApplicationName("MIMMeshtastic")
     app.setOrganizationName("MIMDev")
-    app.setStyle("Fusion")
+    apply_theme(app)
 
-    app_icon_path = get_resource_path("resources/icons/mim_logo.png")
-    app_icon = QIcon(app_icon_path)
-    if not app_icon.isNull():
-        app.setWindowIcon(app_icon)
-
-    font_dir = get_resource_path("resources/fonts")
-    loaded_font_families = []
-    if os.path.isdir(font_dir):
-        for filename in os.listdir(font_dir):
-            if filename.lower().endswith((".ttf", ".otf")):
-                font_path = os.path.join(font_dir, filename)
-                font_id = QFontDatabase.addApplicationFont(font_path)
-                if font_id != -1:
-                    families = QFontDatabase.applicationFontFamilies(font_id)
-                    if "Helvetica" in families and "Helvetica" not in loaded_font_families:
-                        loaded_font_families.append("Helvetica")
-
-    default_font_family = "Helvetica" if "Helvetica" in loaded_font_families else "Arial"
-    default_font_size = 9
-    app.setFont(QFont(default_font_family, default_font_size))
-
-    qss_path = get_resource_path("resources/styles/styles.qss")
-    try:
-        with open(qss_path, "r") as f:
-            app.setStyleSheet(f.read())
-        print(f"DEBUG: Stylesheet '{qss_path}' loaded successfully.")  # Optional: for confirmation
-    except FileNotFoundError:
-        print(f"WARNING: Stylesheet file not found at '{qss_path}'. Proceeding without custom styles.")
-    except Exception as e:
-        import traceback
-
-        print(f"CRITICAL ERROR: Failed to load or apply stylesheet from '{qss_path}'.")
-        print("Error details:")
-        traceback.print_exc()
-
+    if "--smoke-test" in sys.argv:
+        # Exercise startup/cleanup without user config, sounds, radios or brokers.
+        def load_config():
+            return {"screen_name": "SmokeTest", "sounds_enabled": False,
+                    "auto_login": False, "enable_update_notifications": False}
+        QTimer.singleShot(300, app.quit)
     controller = ApplicationController(app)
     exit_code = app.exec()
     sys.exit(exit_code)
